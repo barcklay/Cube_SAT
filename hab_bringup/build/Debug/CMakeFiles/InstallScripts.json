@@ -1,0 +1,8 @@
+{
+	"InstallScripts" : 
+	[
+		"/Users/elzira/Desktop/Cube_SAT/Cube_SAT/hab_bringup/build/Debug/cmake_install.cmake",
+		"/Users/elzira/Desktop/Cube_SAT/Cube_SAT/hab_bringup/build/Debug/cmake/stm32cubemx/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
