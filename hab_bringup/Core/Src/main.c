@@ -21,6 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include <stdio.h>
 
 /* USER CODE END Includes */
 
@@ -91,6 +92,7 @@ int main(void)
   MX_GPIO_Init();
   MX_LPUART1_UART_Init();
   /* USER CODE BEGIN 2 */
+  setvbuf(stdout, NULL, _IONBF, 0);
 
   /* USER CODE END 2 */
 
@@ -105,6 +107,9 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
+    printf("blink\r\n");
+    HAL_Delay(500);
   }
   /* USER CODE END 3 */
 }
@@ -236,6 +241,13 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+/* Retarget printf (syscalls.c _write -> __io_putchar) to LPUART1 / ST-LINK VCP */
+int __io_putchar(int ch)
+{
+  uint8_t c = (uint8_t)ch;
+  HAL_UART_Transmit(&hlpuart1, &c, 1, HAL_MAX_DELAY);
+  return ch;
+}
 
 /* USER CODE END 4 */
 
