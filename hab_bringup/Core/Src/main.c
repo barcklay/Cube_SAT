@@ -22,17 +22,53 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
-
+#include <string.h>
+#include <math.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+/* BMP390 calibration coefficients, already scaled to floating point (datasheet 8.4). */
+typedef struct
+{
+  double t1, t2, t3;
+  double p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11;
+} BmpCalib;
 
+/* One flash page (256 bytes) that survives reset and power-off. */
+typedef struct
+{
+  uint32_t magic;
+  uint32_t boot_count;
+  uint8_t pattern[248];
+} BootRecord;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define BMP390_ADDR      (0x77U << 1)
+#define BMP_REG_CHIP_ID  0x00U
+#define BMP_REG_ERR      0x02U
+#define BMP_REG_DATA     0x04U  /* 6 bytes: pressure xlsb..msb, temperature xlsb..msb */
+#define BMP_REG_PWR_CTRL 0x1BU
+#define BMP_REG_OSR      0x1CU
+#define BMP_REG_ODR      0x1DU
+#define BMP_REG_CONFIG   0x1FU
+#define BMP_REG_CALIB    0x31U  /* 21 bytes of calibration data */
+#define BMP_REG_CMD      0x7EU
 
+#define FLASH_CMD_WREN   0x06U
+#define FLASH_CMD_RDSR   0x05U
+#define FLASH_CMD_READ   0x03U
+#define FLASH_CMD_PP     0x02U  /* page program, up to 256 bytes */
+#define FLASH_CMD_SE     0x20U  /* 4 KB sector erase */
+#define FLASH_CMD_JEDEC  0x9FU
+
+#define FLASH_BOOT_ADDR  0x000000U  /* sector 0: boot record */
+#define FLASH_DEMO_ADDR  0x001000U  /* sector 1: "write without erase" demo */
+#define BOOT_MAGIC       0xCAFE5A7EU
+
+#define STD_SEA_LEVEL_PA 101325.0
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -49,7 +85,8 @@ UART_HandleTypeDef hlpuart1;
 SPI_HandleTypeDef hspi1;
 
 /* USER CODE BEGIN PV */
-
+static BmpCalib bmp_cal;
+static double ground_pa;  /* pressure at power-on, reference for relative altitude */
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -64,37 +101,256 @@ static void MX_SPI1_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-static void PrintChipIds(void)
+/* printf here is newlib-nano without %f, so print fixed-point: 2 decimals. */
+static void PrintFixed2(double v)
 {
-  uint8_t bmp_id = 0;
-  HAL_StatusTypeDef status = HAL_I2C_Mem_Read(
-      &hi2c1, (uint16_t)(0x77U << 1), 0x00U,
-      I2C_MEMADD_SIZE_8BIT, &bmp_id, 1, 100);
-  if (status == HAL_OK)
+  long x = lround(v * 100.0);
+  if (x < 0)
   {
-    printf("BMP390 chip ID: 0x%02X\r\n", (unsigned int)bmp_id);
+    printf("-");
+    x = -x;
+  }
+  printf("%ld.%02ld", x / 100, x % 100);
+}
+
+/* ---------------- BMP390 (I2C) ---------------- */
+
+static HAL_StatusTypeDef BmpRead(uint8_t reg, uint8_t *buf, uint16_t len)
+{
+  return HAL_I2C_Mem_Read(&hi2c1, BMP390_ADDR, reg, I2C_MEMADD_SIZE_8BIT, buf, len, 100);
+}
+
+static HAL_StatusTypeDef BmpWrite(uint8_t reg, uint8_t val)
+{
+  return HAL_I2C_Mem_Write(&hi2c1, BMP390_ADDR, reg, I2C_MEMADD_SIZE_8BIT, &val, 1, 100);
+}
+
+static int BmpInit(void)
+{
+  uint8_t id = 0;
+  if (BmpRead(BMP_REG_CHIP_ID, &id, 1) != HAL_OK || id != 0x60U)
+  {
+    printf("BMP390: not found (id=0x%02X)\r\n", (unsigned int)id);
+    return -1;
+  }
+  printf("BMP390 chip ID: 0x%02X\r\n", (unsigned int)id);
+
+  BmpWrite(BMP_REG_CMD, 0xB6U);  /* soft reset */
+  HAL_Delay(10);
+
+  /* Raw calibration from NVM, then scale each value as in datasheet 8.4. */
+  uint8_t c[21];
+  if (BmpRead(BMP_REG_CALIB, c, sizeof(c)) != HAL_OK)
+  {
+    printf("BMP390: calibration read failed\r\n");
+    return -1;
+  }
+  bmp_cal.t1 = ldexp((uint16_t)(c[1] << 8 | c[0]), 8);
+  bmp_cal.t2 = ldexp((uint16_t)(c[3] << 8 | c[2]), -30);
+  bmp_cal.t3 = ldexp((int8_t)c[4], -48);
+  bmp_cal.p1 = ldexp((int16_t)(c[6] << 8 | c[5]) - 16384, -20);
+  bmp_cal.p2 = ldexp((int16_t)(c[8] << 8 | c[7]) - 16384, -29);
+  bmp_cal.p3 = ldexp((int8_t)c[9], -32);
+  bmp_cal.p4 = ldexp((int8_t)c[10], -37);
+  bmp_cal.p5 = ldexp((uint16_t)(c[12] << 8 | c[11]), 3);
+  bmp_cal.p6 = ldexp((uint16_t)(c[14] << 8 | c[13]), -6);
+  bmp_cal.p7 = ldexp((int8_t)c[15], -8);
+  bmp_cal.p8 = ldexp((int8_t)c[16], -15);
+  bmp_cal.p9 = ldexp((int16_t)(c[18] << 8 | c[17]), -48);
+  bmp_cal.p10 = ldexp((int8_t)c[19], -48);
+  bmp_cal.p11 = ldexp((int8_t)c[20], -65);
+
+  BmpWrite(BMP_REG_OSR, 0x03U);       /* pressure x8, temperature x1 */
+  BmpWrite(BMP_REG_ODR, 0x04U);       /* new sample every 80 ms (12.5 Hz) */
+  BmpWrite(BMP_REG_CONFIG, 0x04U);    /* IIR filter coefficient 3: smooths noise */
+  BmpWrite(BMP_REG_PWR_CTRL, 0x33U);  /* pressure on, temperature on, normal mode */
+  HAL_Delay(100);
+
+  uint8_t err = 0;
+  BmpRead(BMP_REG_ERR, &err, 1);
+  if (err != 0)
+  {
+    printf("BMP390: config error 0x%02X\r\n", (unsigned int)err);
+    return -1;
+  }
+  return 0;
+}
+
+/* Raw ADC values -> degrees C and Pa (datasheet 8.5, 8.6). */
+static int BmpReadData(double *temp_c, double *press_pa)
+{
+  uint8_t d[6];
+  if (BmpRead(BMP_REG_DATA, d, sizeof(d)) != HAL_OK)
+  {
+    return -1;
+  }
+  double up = (double)((uint32_t)d[2] << 16 | (uint32_t)d[1] << 8 | d[0]);
+  double ut = (double)((uint32_t)d[5] << 16 | (uint32_t)d[4] << 8 | d[3]);
+
+  double pd1 = ut - bmp_cal.t1;
+  double t = pd1 * bmp_cal.t2 + pd1 * pd1 * bmp_cal.t3;
+
+  double out1 = bmp_cal.p5 + bmp_cal.p6 * t + bmp_cal.p7 * t * t + bmp_cal.p8 * t * t * t;
+  double out2 = up * (bmp_cal.p1 + bmp_cal.p2 * t + bmp_cal.p3 * t * t + bmp_cal.p4 * t * t * t);
+  double out3 = up * up * (bmp_cal.p9 + bmp_cal.p10 * t) + up * up * up * bmp_cal.p11;
+
+  *temp_c = t;
+  *press_pa = out1 + out2 + out3;
+  return 0;
+}
+
+/* Barometric formula (standard atmosphere), valid up to ~11 km. */
+static double PressureToAltitude(double press_pa, double ref_pa)
+{
+  return 44330.0 * (1.0 - pow(press_pa / ref_pa, 1.0 / 5.255));
+}
+
+/* ---------------- SPI flash (GD25Q128 / W25Q128) ---------------- */
+
+static void FlashSelect(void)
+{
+  HAL_GPIO_WritePin(FLASH_CS_GPIO_Port, FLASH_CS_Pin, GPIO_PIN_RESET);
+}
+
+static void FlashDeselect(void)
+{
+  HAL_GPIO_WritePin(FLASH_CS_GPIO_Port, FLASH_CS_Pin, GPIO_PIN_SET);
+}
+
+/* Command byte + 24-bit address, most significant byte first. */
+static void FlashSendCmdAddr(uint8_t cmd, uint32_t addr)
+{
+  uint8_t hdr[4] = {cmd, (uint8_t)(addr >> 16), (uint8_t)(addr >> 8), (uint8_t)addr};
+  HAL_SPI_Transmit(&hspi1, hdr, sizeof(hdr), 100);
+}
+
+static void FlashWriteEnable(void)
+{
+  uint8_t cmd = FLASH_CMD_WREN;
+  FlashSelect();
+  HAL_SPI_Transmit(&hspi1, &cmd, 1, 100);
+  FlashDeselect();
+}
+
+/* Status register bit 0 (BUSY) is 1 while erase/program is running. */
+static int FlashWaitReady(uint32_t timeout_ms)
+{
+  uint32_t start = HAL_GetTick();
+  uint8_t cmd = FLASH_CMD_RDSR;
+  uint8_t sr = 0;
+  do
+  {
+    FlashSelect();
+    HAL_SPI_Transmit(&hspi1, &cmd, 1, 100);
+    HAL_SPI_Receive(&hspi1, &sr, 1, 100);
+    FlashDeselect();
+    if ((sr & 0x01U) == 0)
+    {
+      return 0;
+    }
+  } while (HAL_GetTick() - start < timeout_ms);
+  return -1;
+}
+
+static void FlashReadJedec(uint8_t id[3])
+{
+  uint8_t cmd = FLASH_CMD_JEDEC;
+  FlashSelect();
+  HAL_SPI_Transmit(&hspi1, &cmd, 1, 100);
+  HAL_SPI_Receive(&hspi1, id, 3, 100);
+  FlashDeselect();
+}
+
+static void FlashRead(uint32_t addr, uint8_t *buf, uint16_t len)
+{
+  FlashSelect();
+  FlashSendCmdAddr(FLASH_CMD_READ, addr);
+  HAL_SPI_Receive(&hspi1, buf, len, 1000);
+  FlashDeselect();
+}
+
+/* Sets every bit of a 4 KB sector back to 1 (all bytes = 0xFF). */
+static int FlashEraseSector(uint32_t addr)
+{
+  FlashWriteEnable();
+  FlashSelect();
+  FlashSendCmdAddr(FLASH_CMD_SE, addr);
+  FlashDeselect();
+  return FlashWaitReady(1000);
+}
+
+/* Programming can only turn bits 1 -> 0, never 0 -> 1. Must stay inside one 256-byte page. */
+static int FlashProgramPage(uint32_t addr, const uint8_t *data, uint16_t len)
+{
+  FlashWriteEnable();
+  FlashSelect();
+  FlashSendCmdAddr(FLASH_CMD_PP, addr);
+  HAL_SPI_Transmit(&hspi1, (uint8_t *)data, len, 100);
+  FlashDeselect();
+  return FlashWaitReady(100);
+}
+
+/* Boot counter in sector 0: proves data survives reset and power-off. */
+static void FlashBootTest(void)
+{
+  uint8_t id[3];
+  FlashReadJedec(id);
+  printf("Flash JEDEC: %02X %02X %02X\r\n", id[0], id[1], id[2]);
+
+  BootRecord rec;
+  FlashRead(FLASH_BOOT_ADDR, (uint8_t *)&rec, sizeof(rec));
+
+  uint32_t prev = 0;
+  if (rec.magic == BOOT_MAGIC)
+  {
+    int intact = 1;
+    for (uint32_t i = 0; i < sizeof(rec.pattern); i++)
+    {
+      if (rec.pattern[i] != (uint8_t)(i + rec.boot_count))
+      {
+        intact = 0;
+      }
+    }
+    prev = rec.boot_count;
+    printf("Flash: found record from previous boot, boot_count=%lu, data %s\r\n",
+           (unsigned long)prev, intact ? "intact" : "CORRUPTED");
   }
   else
   {
-    printf("BMP390 read failed: status=%u error=0x%08lX\r\n",
-           (unsigned int)status, (unsigned long)HAL_I2C_GetError(&hi2c1));
+    printf("Flash: no record yet (first boot or blank sector)\r\n");
   }
 
-  uint8_t tx[4] = {0x9F, 0xFF, 0xFF, 0xFF};
-  uint8_t rx[4] = {0};
-  HAL_GPIO_WritePin(FLASH_CS_GPIO_Port, FLASH_CS_Pin, GPIO_PIN_RESET);
-  status = HAL_SPI_TransmitReceive(&hspi1, tx, rx, sizeof(tx), 100);
-  HAL_GPIO_WritePin(FLASH_CS_GPIO_Port, FLASH_CS_Pin, GPIO_PIN_SET);
-  if (status == HAL_OK)
+  rec.magic = BOOT_MAGIC;
+  rec.boot_count = prev + 1;
+  for (uint32_t i = 0; i < sizeof(rec.pattern); i++)
   {
-    printf("Flash JEDEC: %02X %02X %02X\r\n",
-           (unsigned int)rx[1], (unsigned int)rx[2], (unsigned int)rx[3]);
+    rec.pattern[i] = (uint8_t)(i + rec.boot_count);
   }
-  else
-  {
-    printf("Flash read failed: status=%u error=0x%08lX\r\n",
-           (unsigned int)status, (unsigned long)HAL_SPI_GetError(&hspi1));
-  }
+
+  BootRecord check;
+  int ok = FlashEraseSector(FLASH_BOOT_ADDR) == 0
+        && FlashProgramPage(FLASH_BOOT_ADDR, (uint8_t *)&rec, sizeof(rec)) == 0;
+  FlashRead(FLASH_BOOT_ADDR, (uint8_t *)&check, sizeof(check));
+  ok = ok && memcmp(&rec, &check, sizeof(rec)) == 0;
+  printf("Flash: erase + write + read-back %s, boot_count now %lu\r\n",
+         ok ? "OK" : "FAILED", (unsigned long)rec.boot_count);
+}
+
+/* Why erase is required: programming only clears bits, so old & new = result. */
+static void FlashNoEraseDemo(void)
+{
+  uint8_t b;
+  FlashEraseSector(FLASH_DEMO_ADDR);
+  FlashRead(FLASH_DEMO_ADDR, &b, 1);
+  printf("Flash demo: after erase          -> %02X\r\n", b);
+  b = 0xF0U;
+  FlashProgramPage(FLASH_DEMO_ADDR, &b, 1);
+  FlashRead(FLASH_DEMO_ADDR, &b, 1);
+  printf("Flash demo: write F0             -> %02X\r\n", b);
+  b = 0x0FU;
+  FlashProgramPage(FLASH_DEMO_ADDR, &b, 1);
+  FlashRead(FLASH_DEMO_ADDR, &b, 1);
+  printf("Flash demo: write 0F, no erase   -> %02X (F0 & 0F)\r\n", b);
 }
 /* USER CODE END 0 */
 
@@ -132,8 +388,30 @@ int main(void)
   MX_SPI1_Init();
   /* USER CODE BEGIN 2 */
   setvbuf(stdout, NULL, _IONBF, 0);
-  HAL_GPIO_WritePin(FLASH_CS_GPIO_Port, FLASH_CS_Pin, GPIO_PIN_SET);
+  FlashDeselect();
   HAL_Delay(100);
+  printf("\r\n=== hab_bringup: BMP390 + SPI flash ===\r\n");
+
+  FlashBootTest();
+  FlashNoEraseDemo();
+
+  int bmp_ok = BmpInit() == 0;
+  if (bmp_ok)
+  {
+    /* Average 10 samples at power-on as the "ground" reference. */
+    double sum = 0.0;
+    double t, p;
+    for (int i = 0; i < 10; i++)
+    {
+      HAL_Delay(100);
+      BmpReadData(&t, &p);
+      sum += p;
+    }
+    ground_pa = sum / 10.0;
+    printf("Ground reference: ");
+    PrintFixed2(ground_pa);
+    printf(" Pa\r\n");
+  }
   /* USER CODE END 2 */
 
   /* Initialize USER push-button, will be used to trigger an interrupt each time it's pressed.*/
@@ -147,8 +425,24 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    PrintChipIds();
-    HAL_Delay(2000);
+    double temp_c, press_pa;
+    if (bmp_ok && BmpReadData(&temp_c, &press_pa) == 0)
+    {
+      printf("T=");
+      PrintFixed2(temp_c);
+      printf(" C  P=");
+      PrintFixed2(press_pa);
+      printf(" Pa  alt=");
+      PrintFixed2(PressureToAltitude(press_pa, STD_SEA_LEVEL_PA));
+      printf(" m  rel=");
+      PrintFixed2(PressureToAltitude(press_pa, ground_pa));
+      printf(" m\r\n");
+    }
+    else
+    {
+      printf("BMP390 read failed\r\n");
+    }
+    HAL_Delay(500);
   }
 
   /* USER CODE END 3 */
