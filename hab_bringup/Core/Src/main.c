@@ -138,6 +138,7 @@ static GpsData gps;
 static UbxFrame ubx;
 static int gsv_in_view[sizeof(GPS_TALKERS) - 1];  /* satellites in view per constellation */
 static uint32_t nmea_ok, nmea_bad;
+static int gps_boot_dynmodel = -1;  /* RAM value right after power-up, before we set it */
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -738,6 +739,7 @@ static void GpsInit(void)
   /* 2. What model did the module wake up with? 8 here after a power cycle = setting survived. */
   int ram = GpsGetDynModel(0);
   int bbr = GpsGetDynModel(1);
+  gps_boot_dynmodel = ram;
   printf("GPS dynModel at boot: RAM=%d (%s), BBR=%d (%s)\r\n",
          ram, DynModelName(ram), bbr, DynModelName(bbr));
 
@@ -773,7 +775,7 @@ static void GpsPrintStatus(void)
     PrintFixed(gps.alt_m, 1);
     printf(" m");
   }
-  printf("  (nmea ok=%lu bad=%lu lost=%lu)\r\n",
+  printf("  model@boot=%d  (nmea ok=%lu bad=%lu lost=%lu)\r\n", gps_boot_dynmodel,
          (unsigned long)nmea_ok, (unsigned long)nmea_bad, (unsigned long)gps_rx_overflow);
 }
 /* USER CODE END 0 */
