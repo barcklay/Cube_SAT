@@ -106,6 +106,7 @@ typedef struct
 #define UBX_LAYER_BBR    0x02U  /* battery-backed RAM: kept while the backup cell holds */
 #define CFG_NAVSPG_DYNMODEL 0x20110021UL  /* key ID, 1-byte value */
 #define DYNMODEL_AIRBORNE_4G 8U
+#define GPS_ECHO_NMEA    0  /* 1 = also print every valid NMEA sentence (for logging) */
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -508,6 +509,9 @@ static void NmeaHandle(char *line)
     return;
   }
   nmea_ok++;
+#if GPS_ECHO_NMEA
+  printf("%s\r\n", line);
+#endif
   *star = '\0';
 
   char *f[24];
