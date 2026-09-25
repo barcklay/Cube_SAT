@@ -22,6 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <math.h>
 /* USER CODE END Includes */
@@ -42,6 +43,27 @@ typedef struct
   uint32_t boot_count;
   uint8_t pattern[248];
 } BootRecord;
+
+/* Latest GPS data, filled from NMEA GGA and GSV sentences. */
+typedef struct
+{
+  int fix_quality;  /* 0 = no fix, 1 = GPS fix, 2 = DGPS */
+  int sats_used;
+  double lat_deg;   /* + north */
+  double lon_deg;   /* + east */
+  double alt_m;     /* above mean sea level */
+  char utc[7];      /* "hhmmss" */
+} GpsData;
+
+/* Last complete UBX frame from the GPS: answers to our config commands. */
+typedef struct
+{
+  uint8_t cls;
+  uint8_t id;
+  uint16_t len;
+  uint8_t payload[64];
+  int ready;
+} UbxFrame;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -69,6 +91,21 @@ typedef struct
 #define BOOT_MAGIC       0xCAFE5A7EU
 
 #define STD_SEA_LEVEL_PA 101325.0
+
+#define GPS_RX_BUF_SIZE  2048U  /* ~2 s of NMEA at 9600 baud */
+#define GPS_LINE_MAX     100U   /* NMEA sentences are at most 82 chars */
+#define GPS_TALKERS      "PLABQ" /* GP GPS, GL GLONASS, GA Galileo, GB BeiDou, GQ QZSS */
+
+#define UBX_CLASS_ACK    0x05U
+#define UBX_ID_ACK       0x01U
+#define UBX_ID_NAK       0x00U
+#define UBX_CLASS_CFG    0x06U
+#define UBX_ID_VALSET    0x8AU
+#define UBX_ID_VALGET    0x8BU
+#define UBX_LAYER_RAM    0x01U  /* VALSET layer bits */
+#define UBX_LAYER_BBR    0x02U  /* battery-backed RAM: kept while the backup cell holds */
+#define CFG_NAVSPG_DYNMODEL 0x20110021UL  /* key ID, 1-byte value */
+#define DYNMODEL_AIRBORNE_4G 8U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -81,12 +118,26 @@ typedef struct
 I2C_HandleTypeDef hi2c1;
 
 UART_HandleTypeDef hlpuart1;
+UART_HandleTypeDef huart1;
 
 SPI_HandleTypeDef hspi1;
 
 /* USER CODE BEGIN PV */
 static BmpCalib bmp_cal;
 static double ground_pa;  /* pressure at power-on, reference for relative altitude */
+
+/* Ring buffer: the UART interrupt writes at head, the main loop reads at tail. */
+static uint8_t gps_rx_byte;
+static uint8_t gps_rx_buf[GPS_RX_BUF_SIZE];
+static volatile uint16_t gps_rx_head;
+static volatile uint16_t gps_rx_tail;
+static volatile uint32_t gps_rx_total;
+static volatile uint32_t gps_rx_overflow;
+
+static GpsData gps;
+static UbxFrame ubx;
+static int gsv_in_view[sizeof(GPS_TALKERS) - 1];  /* satellites in view per constellation */
+static uint32_t nmea_ok, nmea_bad;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -95,22 +146,41 @@ static void MX_GPIO_Init(void);
 static void MX_LPUART1_UART_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_SPI1_Init(void);
+static void MX_USART1_UART_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-/* printf here is newlib-nano without %f, so print fixed-point: 2 decimals. */
-static void PrintFixed2(double v)
+/* printf here is newlib-nano without %f, so print fixed-point with N decimals. */
+static void PrintFixed(double v, int decimals)
 {
-  long x = lround(v * 100.0);
+  long scale = 1;
+  for (int i = 0; i < decimals; i++)
+  {
+    scale *= 10;
+  }
+  long x = lround(v * (double)scale);
   if (x < 0)
   {
     printf("-");
     x = -x;
   }
-  printf("%ld.%02ld", x / 100, x % 100);
+  char frac[12];
+  long rest = x % scale;
+  for (int i = decimals - 1; i >= 0; i--)
+  {
+    frac[i] = (char)('0' + rest % 10);
+    rest /= 10;
+  }
+  frac[decimals] = '\0';
+  printf("%ld.%s", x / scale, frac);
+}
+
+static void PrintFixed2(double v)
+{
+  PrintFixed(v, 2);
 }
 
 /* ---------------- BMP390 (I2C) ---------------- */
@@ -352,6 +422,360 @@ static void FlashNoEraseDemo(void)
   FlashRead(FLASH_DEMO_ADDR, &b, 1);
   printf("Flash demo: write 0F, no erase   -> %02X (F0 & 0F)\r\n", b);
 }
+
+/* ---------------- GPS MAX-M10S (USART1, 9600 baud) ---------------- */
+
+/* Interrupt: one byte arrived -> store it and ask for the next one. */
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+  if (huart == &huart1)
+  {
+    uint16_t next = (uint16_t)((gps_rx_head + 1U) % GPS_RX_BUF_SIZE);
+    if (next != gps_rx_tail)
+    {
+      gps_rx_buf[gps_rx_head] = gps_rx_byte;
+      gps_rx_head = next;
+    }
+    else
+    {
+      gps_rx_overflow++;  /* main loop is too slow: byte lost */
+    }
+    gps_rx_total++;
+    HAL_UART_Receive_IT(&huart1, &gps_rx_byte, 1);
+  }
+}
+
+/* Noise or overrun stops HAL reception; restart it. */
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+  if (huart == &huart1)
+  {
+    HAL_UART_Receive_IT(&huart1, &gps_rx_byte, 1);
+  }
+}
+
+static int HexDigit(char c)
+{
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+
+/* Split "a,b,,c" in place into fields; returns the number of fields. */
+static int NmeaSplit(char *s, char *field[], int max)
+{
+  int n = 0;
+  field[n++] = s;
+  for (; *s != '\0' && n < max; s++)
+  {
+    if (*s == ',')
+    {
+      *s = '\0';
+      field[n++] = s + 1;
+    }
+  }
+  return n;
+}
+
+/* NMEA "ddmm.mmmm" + hemisphere -> signed decimal degrees. */
+static double NmeaToDegrees(const char *value, const char *hemi)
+{
+  double raw = atof(value);
+  int deg = (int)(raw / 100.0);
+  double d = deg + (raw - deg * 100.0) / 60.0;
+  return (hemi[0] == 'S' || hemi[0] == 'W') ? -d : d;
+}
+
+/* One full sentence like "$GNGGA,...*5C" without the line ending. */
+static void NmeaHandle(char *line)
+{
+  /* Checksum = XOR of all chars between '$' and '*', written as 2 hex digits. */
+  char *star = strchr(line, '*');
+  if (line[0] != '$' || star == NULL || HexDigit(star[1]) < 0 || HexDigit(star[2]) < 0)
+  {
+    nmea_bad++;
+    return;
+  }
+  uint8_t sum = 0;
+  for (char *p = line + 1; p < star; p++)
+  {
+    sum ^= (uint8_t)*p;
+  }
+  if (sum != (uint8_t)(HexDigit(star[1]) << 4 | HexDigit(star[2])))
+  {
+    nmea_bad++;
+    return;
+  }
+  nmea_ok++;
+  *star = '\0';
+
+  char *f[24];
+  int n = NmeaSplit(line + 1, f, 24);  /* f[0] = "GNGGA": 2-letter talker + type */
+  if (strlen(f[0]) != 5)
+  {
+    return;
+  }
+  const char *type = f[0] + 2;
+
+  if (strcmp(type, "GGA") == 0 && n >= 10)
+  {
+    /* 1 UTC time, 2 lat, 3 N/S, 4 lon, 5 E/W, 6 fix quality, 7 sats used, 8 HDOP, 9 altitude */
+    strncpy(gps.utc, f[1], 6);
+    gps.utc[6] = '\0';
+    gps.fix_quality = atoi(f[6]);
+    gps.sats_used = atoi(f[7]);
+    if (gps.fix_quality > 0)
+    {
+      gps.lat_deg = NmeaToDegrees(f[2], f[3]);
+      gps.lon_deg = NmeaToDegrees(f[4], f[5]);
+      gps.alt_m = atof(f[9]);
+    }
+  }
+  else if (strcmp(type, "GSV") == 0 && n >= 4)
+  {
+    /* 1 number of messages, 2 this message number, 3 satellites in view */
+    const char *t = strchr(GPS_TALKERS, f[0][1]);
+    if (t != NULL && atoi(f[2]) == 1)
+    {
+      gsv_in_view[t - GPS_TALKERS] = atoi(f[3]);
+    }
+  }
+}
+
+/* Feed one received byte: text goes to NMEA, 0xB5 0x62 ... frames go to UBX. */
+static void GpsProcessByte(uint8_t b)
+{
+  static char line[GPS_LINE_MAX];
+  static uint16_t line_len;
+  static UbxFrame f;
+  static uint8_t state, ck_a, ck_b;
+  static uint16_t idx;
+
+  switch (state)
+  {
+    case 0:  /* outside UBX: collect NMEA text */
+      if (b == 0xB5U)
+      {
+        state = 1;
+      }
+      else if (b == '$')
+      {
+        line[0] = '$';
+        line_len = 1;
+      }
+      else if (b == '\n' || b == '\r')
+      {
+        if (line_len > 0)
+        {
+          line[line_len] = '\0';
+          NmeaHandle(line);
+          line_len = 0;
+        }
+      }
+      else if (line_len > 0 && line_len < GPS_LINE_MAX - 1U)
+      {
+        line[line_len++] = (char)b;
+      }
+      break;
+    case 1: state = (b == 0x62U) ? 2 : 0; break;              /* second sync byte */
+    case 2: f.cls = b; ck_a = b; ck_b = ck_a; state = 3; break;
+    case 3: f.id = b; ck_a += b; ck_b += ck_a; state = 4; break;
+    case 4: f.len = b; ck_a += b; ck_b += ck_a; state = 5; break;
+    case 5:
+      f.len |= (uint16_t)b << 8;
+      ck_a += b; ck_b += ck_a;
+      idx = 0;
+      state = (f.len > sizeof(f.payload)) ? 0 : (f.len ? 6 : 7);
+      break;
+    case 6:
+      f.payload[idx++] = b;
+      ck_a += b; ck_b += ck_a;
+      if (idx == f.len) state = 7;
+      break;
+    case 7: state = (b == ck_a) ? 8 : 0; break;               /* checksum A */
+    case 8:                                                    /* checksum B */
+      if (b == ck_b)
+      {
+        f.ready = 1;
+        ubx = f;
+      }
+      state = 0;
+      break;
+  }
+}
+
+/* Drain everything the interrupt has collected so far. */
+static void GpsPoll(void)
+{
+  while (gps_rx_tail != gps_rx_head)
+  {
+    uint8_t b = gps_rx_buf[gps_rx_tail];
+    gps_rx_tail = (uint16_t)((gps_rx_tail + 1U) % GPS_RX_BUF_SIZE);
+    GpsProcessByte(b);
+  }
+}
+
+/* UBX frame: B5 62 class id len(2, LSB first) payload ck_a ck_b (Fletcher checksum). */
+static void UbxSend(uint8_t cls, uint8_t id, const uint8_t *payload, uint16_t len)
+{
+  uint8_t hdr[6] = {0xB5U, 0x62U, cls, id, (uint8_t)len, (uint8_t)(len >> 8)};
+  uint8_t ck[2] = {0, 0};
+  for (int i = 2; i < 6; i++)
+  {
+    ck[0] += hdr[i];
+    ck[1] += ck[0];
+  }
+  for (uint16_t i = 0; i < len; i++)
+  {
+    ck[0] += payload[i];
+    ck[1] += ck[0];
+  }
+  ubx.ready = 0;
+  HAL_UART_Transmit(&huart1, hdr, sizeof(hdr), 100);
+  HAL_UART_Transmit(&huart1, (uint8_t *)payload, len, 100);
+  HAL_UART_Transmit(&huart1, ck, sizeof(ck), 100);
+}
+
+/* Send a request and wait for the answer.
+   Returns 1 on data (want_data) or ACK, 0 on NAK, -1 on timeout. */
+static int UbxRequest(uint8_t cls, uint8_t id, const uint8_t *payload, uint16_t len, int want_data)
+{
+  UbxSend(cls, id, payload, len);
+  uint32_t start = HAL_GetTick();
+  while (HAL_GetTick() - start < 1000U)
+  {
+    GpsPoll();
+    if (!ubx.ready)
+    {
+      continue;
+    }
+    ubx.ready = 0;
+    if (want_data && ubx.cls == cls && ubx.id == id)
+    {
+      return 1;
+    }
+    if (ubx.cls == UBX_CLASS_ACK && ubx.len >= 2 && ubx.payload[0] == cls && ubx.payload[1] == id)
+    {
+      if (ubx.id == UBX_ID_NAK) return 0;
+      if (!want_data) return 1;
+    }
+  }
+  return -1;
+}
+
+/* Read the dynamic model from a layer: 0 = RAM (active), 1 = BBR (kept by backup cell).
+   Returns the value, -2 if the layer holds no value (NAK), -1 on timeout. */
+static int GpsGetDynModel(uint8_t layer)
+{
+  uint8_t p[8] = {0x00, layer, 0x00, 0x00,
+                  (uint8_t)CFG_NAVSPG_DYNMODEL, (uint8_t)(CFG_NAVSPG_DYNMODEL >> 8),
+                  (uint8_t)(CFG_NAVSPG_DYNMODEL >> 16), (uint8_t)(CFG_NAVSPG_DYNMODEL >> 24)};
+  int r = UbxRequest(UBX_CLASS_CFG, UBX_ID_VALGET, p, sizeof(p), 1);
+  if (r == 0) return -2;
+  if (r < 0 || ubx.len < 9) return -1;
+  return ubx.payload[8];  /* version, layer, position(2), key(4), value */
+}
+
+static const char *DynModelName(int m)
+{
+  switch (m)
+  {
+    case 0: return "portable";
+    case 2: return "stationary";
+    case 3: return "pedestrian";
+    case 4: return "automotive";
+    case 6: return "airborne<1g";
+    case 7: return "airborne<2g";
+    case 8: return "AIRBORNE<4g";
+    case -1: return "no answer";
+    case -2: return "not stored";
+    default: return "other";
+  }
+}
+
+/* Modules are sometimes pre-set to another speed: try common baud rates
+   and keep the first one where NMEA checksums pass. Returns the baud or 0. */
+static uint32_t GpsDetectBaud(void)
+{
+  static const uint32_t bauds[] = {9600, 38400, 115200, 57600, 19200, 4800};
+  for (unsigned i = 0; i < sizeof(bauds) / sizeof(bauds[0]); i++)
+  {
+    HAL_UART_AbortReceive(&huart1);
+    huart1.Init.BaudRate = bauds[i];
+    HAL_UART_Init(&huart1);
+    gps_rx_tail = gps_rx_head;  /* drop bytes received at the old speed */
+    gps_rx_total = 0;
+    nmea_ok = 0;
+    nmea_bad = 0;
+    HAL_UART_Receive_IT(&huart1, &gps_rx_byte, 1);
+
+    uint32_t start = HAL_GetTick();
+    while (nmea_ok < 2 && HAL_GetTick() - start < 1500U)
+    {
+      GpsPoll();
+    }
+    printf("GPS baud %6lu: bytes=%lu nmea ok=%lu bad=%lu\r\n", (unsigned long)bauds[i],
+           (unsigned long)gps_rx_total, (unsigned long)nmea_ok, (unsigned long)nmea_bad);
+    if (nmea_ok >= 2)
+    {
+      return bauds[i];
+    }
+  }
+  return 0;
+}
+
+static void GpsInit(void)
+{
+  /* 1. Is the module talking, and at what speed? */
+  uint32_t baud = GpsDetectBaud();
+  if (baud == 0)
+  {
+    printf("GPS: no valid NMEA at any speed. Check GPS TX -> D0, GND, power\r\n");
+    return;
+  }
+  printf("GPS: NMEA OK at %lu baud\r\n", (unsigned long)baud);
+
+  /* 2. What model did the module wake up with? 8 here after a power cycle = setting survived. */
+  int ram = GpsGetDynModel(0);
+  int bbr = GpsGetDynModel(1);
+  printf("GPS dynModel at boot: RAM=%d (%s), BBR=%d (%s)\r\n",
+         ram, DynModelName(ram), bbr, DynModelName(bbr));
+
+  /* 3. Set Airborne <4g in RAM (now) and BBR (after power-off, if the backup cell holds). */
+  uint8_t p[9] = {0x00, UBX_LAYER_RAM | UBX_LAYER_BBR, 0x00, 0x00,
+                  (uint8_t)CFG_NAVSPG_DYNMODEL, (uint8_t)(CFG_NAVSPG_DYNMODEL >> 8),
+                  (uint8_t)(CFG_NAVSPG_DYNMODEL >> 16), (uint8_t)(CFG_NAVSPG_DYNMODEL >> 24),
+                  DYNMODEL_AIRBORNE_4G};
+  int r = UbxRequest(UBX_CLASS_CFG, UBX_ID_VALSET, p, sizeof(p), 0);
+  printf("GPS set Airborne<4g: %s\r\n", r == 1 ? "ACK" : (r == 0 ? "NAK" : "no answer"));
+
+  /* 4. Read back to be sure. */
+  ram = GpsGetDynModel(0);
+  printf("GPS dynModel now: RAM=%d (%s)\r\n", ram, DynModelName(ram));
+}
+
+static void GpsPrintStatus(void)
+{
+  int in_view = 0;
+  for (unsigned i = 0; i < sizeof(gsv_in_view) / sizeof(gsv_in_view[0]); i++)
+  {
+    in_view += gsv_in_view[i];
+  }
+  printf("GPS: UTC %.2s:%.2s:%.2s  fix=%d  used=%d  in_view=%d",
+         gps.utc, gps.utc + 2, gps.utc + 4, gps.fix_quality, gps.sats_used, in_view);
+  if (gps.fix_quality > 0)
+  {
+    printf("  lat=");
+    PrintFixed(gps.lat_deg, 6);
+    printf("  lon=");
+    PrintFixed(gps.lon_deg, 6);
+    printf("  alt=");
+    PrintFixed(gps.alt_m, 1);
+    printf(" m");
+  }
+  printf("  (nmea ok=%lu bad=%lu lost=%lu)\r\n",
+         (unsigned long)nmea_ok, (unsigned long)nmea_bad, (unsigned long)gps_rx_overflow);
+}
 /* USER CODE END 0 */
 
 /**
@@ -386,11 +810,12 @@ int main(void)
   MX_LPUART1_UART_Init();
   MX_I2C1_Init();
   MX_SPI1_Init();
+  MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
   setvbuf(stdout, NULL, _IONBF, 0);
   FlashDeselect();
   HAL_Delay(100);
-  printf("\r\n=== hab_bringup: BMP390 + SPI flash ===\r\n");
+  printf("\r\n=== hab_bringup: BMP390 + SPI flash + GPS ===\r\n");
 
   FlashBootTest();
   FlashNoEraseDemo();
@@ -412,6 +837,9 @@ int main(void)
     PrintFixed2(ground_pa);
     printf(" Pa\r\n");
   }
+
+  GpsInit();
+  uint32_t last_print = HAL_GetTick();
   /* USER CODE END 2 */
 
   /* Initialize USER push-button, will be used to trigger an interrupt each time it's pressed.*/
@@ -425,6 +853,15 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    /* GPS bytes arrive all the time, so read them on every pass; print once per second. */
+    GpsPoll();
+    if (HAL_GetTick() - last_print < 1000U)
+    {
+      continue;
+    }
+    last_print += 1000U;
+
+    GpsPrintStatus();
     double temp_c, press_pa;
     if (bmp_ok && BmpReadData(&temp_c, &press_pa) == 0)
     {
@@ -442,7 +879,6 @@ int main(void)
     {
       printf("BMP390 read failed\r\n");
     }
-    HAL_Delay(500);
   }
 
   /* USER CODE END 3 */
@@ -586,6 +1022,54 @@ static void MX_LPUART1_UART_Init(void)
   /* USER CODE BEGIN LPUART1_Init 2 */
 
   /* USER CODE END LPUART1_Init 2 */
+
+}
+
+/**
+  * @brief USART1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART1_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART1_Init 0 */
+
+  /* USER CODE END USART1_Init 0 */
+
+  /* USER CODE BEGIN USART1_Init 1 */
+
+  /* USER CODE END USART1_Init 1 */
+  huart1.Instance = USART1;
+  huart1.Init.BaudRate = 9600;
+  huart1.Init.WordLength = UART_WORDLENGTH_8B;
+  huart1.Init.StopBits = UART_STOPBITS_1;
+  huart1.Init.Parity = UART_PARITY_NONE;
+  huart1.Init.Mode = UART_MODE_TX_RX;
+  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  huart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  huart1.Init.ClockPrescaler = UART_PRESCALER_DIV1;
+  huart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (HAL_UART_Init(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_UARTEx_SetTxFifoThreshold(&huart1, UART_TXFIFO_THRESHOLD_1_8) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_UARTEx_SetRxFifoThreshold(&huart1, UART_RXFIFO_THRESHOLD_1_8) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_UARTEx_DisableFifoMode(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART1_Init 2 */
+
+  /* USER CODE END USART1_Init 2 */
 
 }
 
