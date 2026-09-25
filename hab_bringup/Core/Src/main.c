@@ -106,6 +106,22 @@ typedef struct
 #define UBX_LAYER_BBR    0x02U  /* battery-backed RAM: kept while the backup cell holds */
 #define CFG_NAVSPG_DYNMODEL 0x20110021UL  /* key ID, 1-byte value */
 #define DYNMODEL_AIRBORNE_4G 8U
+/* ICM-42688-P IMU on its own SPI3 (PC10/PC11/PC12), CS on PC7 (D9). Until PC7 gets the IMU_CS label in CubeMX,
+   the pin is set up by ImuCsInit() below. */
+#ifndef IMU_CS_Pin
+#define IMU_CS_Pin       GPIO_PIN_7
+#define IMU_CS_GPIO_Port GPIOC
+#define IMU_CS_MANUAL_INIT 1
+#endif
+#define IMU_REG_WHO_AM_I 0x75U
+#define IMU_WHO_AM_I_VAL 0x47U
+#define IMU_REG_INTF_CONFIG0 0x4CU  /* bits 1:0 UI_SIFS_CFG: 11 = disable I2C */
+#define IMU_REG_TEMP_DATA1   0x1DU  /* 14 bytes: temp, accel X/Y/Z, gyro X/Y/Z, big-endian */
+#define IMU_REG_PWR_MGMT0    0x4EU
+#define IMU_ACCEL_LSB_PER_G  2048.0  /* default range +-16 g */
+#define IMU_GYRO_LSB_PER_DPS 16.4    /* default range +-2000 deg/s */
+
+#define WIRING_DIAG      1  /* 1 = at boot, probe the SPI flash wiring and print a verdict */
 #define GPS_ECHO_NMEA    0  /* 1 = also print every valid NMEA sentence (for logging) */
 /* USER CODE END PD */
 
@@ -122,6 +138,7 @@ UART_HandleTypeDef hlpuart1;
 UART_HandleTypeDef huart1;
 
 SPI_HandleTypeDef hspi1;
+SPI_HandleTypeDef hspi3;
 
 /* USER CODE BEGIN PV */
 static BmpCalib bmp_cal;
@@ -149,6 +166,7 @@ static void MX_LPUART1_UART_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_USART1_UART_Init(void);
+static void MX_SPI3_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -423,6 +441,257 @@ static void FlashNoEraseDemo(void)
   FlashProgramPage(FLASH_DEMO_ADDR, &b, 1);
   FlashRead(FLASH_DEMO_ADDR, &b, 1);
   printf("Flash demo: write 0F, no erase   -> %02X (F0 & 0F)\r\n", b);
+}
+
+/* ---------------- IMU ICM-42688-P (SPI3, own bus) ---------------- */
+
+static void ImuCsInit(void)
+{
+#ifdef IMU_CS_MANUAL_INIT
+  /* CS must idle high, otherwise the IMU answers while we talk to the flash. */
+  __HAL_RCC_GPIOC_CLK_ENABLE();
+  HAL_GPIO_WritePin(IMU_CS_GPIO_Port, IMU_CS_Pin, GPIO_PIN_SET);
+  GPIO_InitTypeDef g = {0};
+  g.Pin = IMU_CS_Pin;
+  g.Mode = GPIO_MODE_OUTPUT_PP;
+  g.Pull = GPIO_NOPULL;
+  g.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(IMU_CS_GPIO_Port, &g);
+#endif
+  HAL_GPIO_WritePin(IMU_CS_GPIO_Port, IMU_CS_Pin, GPIO_PIN_SET);
+}
+
+/* SPI read: first byte = register address with bit 7 set (= read). */
+static uint8_t ImuReadReg(uint8_t reg)
+{
+  uint8_t tx = reg | 0x80U;
+  uint8_t val = 0;
+  HAL_GPIO_WritePin(IMU_CS_GPIO_Port, IMU_CS_Pin, GPIO_PIN_RESET);
+  HAL_SPI_Transmit(&hspi3, &tx, 1, 100);
+  HAL_SPI_Receive(&hspi3, &val, 1, 100);
+  HAL_GPIO_WritePin(IMU_CS_GPIO_Port, IMU_CS_Pin, GPIO_PIN_SET);
+  return val;
+}
+
+static void ImuWriteReg(uint8_t reg, uint8_t val)
+{
+  uint8_t tx[2] = {reg & 0x7FU, val};
+  HAL_GPIO_WritePin(IMU_CS_GPIO_Port, IMU_CS_Pin, GPIO_PIN_RESET);
+  HAL_SPI_Transmit(&hspi3, tx, sizeof(tx), 100);
+  HAL_GPIO_WritePin(IMU_CS_GPIO_Port, IMU_CS_Pin, GPIO_PIN_SET);
+}
+
+/* The IMU shares its SPI pins with I2C (SCLK = SCL, SDI = SDA). We use SPI only,
+   so switch the I2C interface off (it usually already is). */
+static void ImuDisableI2c(void)
+{
+  uint8_t before = ImuReadReg(IMU_REG_INTF_CONFIG0);
+  ImuWriteReg(IMU_REG_INTF_CONFIG0, (uint8_t)((before & ~0x03U) | 0x03U));
+  uint8_t after = ImuReadReg(IMU_REG_INTF_CONFIG0);
+  printf("IMU INTF_CONFIG0: 0x%02X -> 0x%02X (I2C off)\r\n", (unsigned int)before, (unsigned int)after);
+}
+
+/* Burst read: the register address auto-increments while CS stays low. */
+static void ImuReadRegs(uint8_t reg, uint8_t *buf, uint16_t len)
+{
+  uint8_t tx = reg | 0x80U;
+  HAL_GPIO_WritePin(IMU_CS_GPIO_Port, IMU_CS_Pin, GPIO_PIN_RESET);
+  HAL_SPI_Transmit(&hspi3, &tx, 1, 100);
+  HAL_SPI_Receive(&hspi3, buf, len, 100);
+  HAL_GPIO_WritePin(IMU_CS_GPIO_Port, IMU_CS_Pin, GPIO_PIN_SET);
+}
+
+static int ImuInit(void)
+{
+  uint8_t id = ImuReadReg(IMU_REG_WHO_AM_I);
+  printf("IMU WHO_AM_I: 0x%02X (%s)\r\n", (unsigned int)id,
+         id == IMU_WHO_AM_I_VAL ? "ICM-42688-P OK" : "unexpected");
+  if (id != IMU_WHO_AM_I_VAL)
+  {
+    return -1;
+  }
+  ImuDisableI2c();
+  ImuWriteReg(IMU_REG_PWR_MGMT0, 0x0FU);  /* gyro + accel on, low-noise mode */
+  HAL_Delay(50);                          /* gyro needs ~45 ms to start */
+  return 0;
+}
+
+/* Raw 16-bit values -> g, deg/s and deg C (datasheet: temp = raw / 132.48 + 25). */
+static void ImuPrintStatus(void)
+{
+  uint8_t d[14];
+  ImuReadRegs(IMU_REG_TEMP_DATA1, d, sizeof(d));
+  int16_t raw[7];
+  for (int i = 0; i < 7; i++)
+  {
+    raw[i] = (int16_t)((uint16_t)d[2 * i] << 8 | d[2 * i + 1]);
+  }
+  printf("IMU: acc g x=");
+  PrintFixed(raw[1] / IMU_ACCEL_LSB_PER_G, 2);
+  printf(" y=");
+  PrintFixed(raw[2] / IMU_ACCEL_LSB_PER_G, 2);
+  printf(" z=");
+  PrintFixed(raw[3] / IMU_ACCEL_LSB_PER_G, 2);
+  printf("  gyro dps x=");
+  PrintFixed(raw[4] / IMU_GYRO_LSB_PER_DPS, 1);
+  printf(" y=");
+  PrintFixed(raw[5] / IMU_GYRO_LSB_PER_DPS, 1);
+  printf(" z=");
+  PrintFixed(raw[6] / IMU_GYRO_LSB_PER_DPS, 1);
+  printf("  T=");
+  PrintFixed(raw[0] / 132.48 + 25.0, 1);
+  printf(" C\r\n");
+}
+
+/* ---------------- Wiring check for the SPI flash ----------------
+   SPI1 is switched off and the pins are driven by hand (bit-bang), so we can try
+   "what if" cases: CS on another socket, DI and DO swapped. The case where the flash
+   answers its real JEDEC ID tells which wire is where. */
+
+typedef struct
+{
+  GPIO_TypeDef *port;
+  uint16_t pin;
+  const char *name;
+} DiagPin;
+
+static void DiagPinMode(const DiagPin *p, uint32_t mode, uint32_t pull)
+{
+  GPIO_InitTypeDef g = {0};
+  g.Pin = p->pin;
+  g.Mode = mode;
+  g.Pull = pull;
+  g.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(p->port, &g);
+}
+
+static void DiagDelay(void)
+{
+  for (volatile int i = 0; i < 40; i++)
+  {
+  }
+}
+
+/* SPI mode 0 by hand: set data, clock up (device samples), read, clock down. */
+static void DiagTransfer(const DiagPin *cs, const DiagPin *mosi, const DiagPin *miso,
+                         const DiagPin *sck, const uint8_t *tx, uint8_t *rx, int n)
+{
+  HAL_GPIO_WritePin(cs->port, cs->pin, GPIO_PIN_RESET);
+  DiagDelay();
+  for (int i = 0; i < n; i++)
+  {
+    uint8_t in = 0;
+    for (int bit = 7; bit >= 0; bit--)
+    {
+      HAL_GPIO_WritePin(mosi->port, mosi->pin, (tx[i] >> bit) & 1U ? GPIO_PIN_SET : GPIO_PIN_RESET);
+      DiagDelay();
+      HAL_GPIO_WritePin(sck->port, sck->pin, GPIO_PIN_SET);
+      DiagDelay();
+      in = (uint8_t)(in << 1 | (HAL_GPIO_ReadPin(miso->port, miso->pin) == GPIO_PIN_SET));
+      HAL_GPIO_WritePin(sck->port, sck->pin, GPIO_PIN_RESET);
+    }
+    rx[i] = in;
+  }
+  HAL_GPIO_WritePin(cs->port, cs->pin, GPIO_PIN_SET);
+  DiagDelay();
+}
+
+/* JEDEC read (command 0x9F, then 3 answer bytes). */
+static void DiagJedec(const DiagPin *cs, const DiagPin *mosi, const DiagPin *miso,
+                      const DiagPin *sck, uint8_t id[3])
+{
+  uint8_t tx[4] = {FLASH_CMD_JEDEC, 0, 0, 0};
+  uint8_t rx[4];
+  DiagPinMode(mosi, GPIO_MODE_OUTPUT_PP, GPIO_NOPULL);
+  DiagPinMode(miso, GPIO_MODE_INPUT, GPIO_PULLUP);
+  DiagTransfer(cs, mosi, miso, sck, tx, rx, 4);
+  memcpy(id, &rx[1], 3);
+}
+
+static void FlashWiringCheck(void)
+{
+  const DiagPin sck  = {GPIOA, GPIO_PIN_5, "D13"};
+  const DiagPin line_d11 = {GPIOA, GPIO_PIN_7, "D11"};
+  const DiagPin line_d12 = {GPIOA, GPIO_PIN_6, "D12"};
+  /* D8 (PA9) has nothing on it: reading "through" it shows what the line looks like when nobody answers. */
+  const DiagPin cs_list[] = {{GPIOB, GPIO_PIN_6, "D10"}, {GPIOC, GPIO_PIN_7, "D9"}, {GPIOA, GPIO_PIN_9, "D8"}};
+  const int n_cs = (int)(sizeof(cs_list) / sizeof(cs_list[0]));
+
+  printf("--- Flash wiring check (expected JEDEC C8 40 18) ---\r\n");
+  HAL_SPI_DeInit(&hspi1);
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+  __HAL_RCC_GPIOC_CLK_ENABLE();
+  for (int c = 0; c < n_cs; c++)
+  {
+    HAL_GPIO_WritePin(cs_list[c].port, cs_list[c].pin, GPIO_PIN_SET);
+    DiagPinMode(&cs_list[c], GPIO_MODE_OUTPUT_PP, GPIO_NOPULL);
+  }
+  HAL_GPIO_WritePin(sck.port, sck.pin, GPIO_PIN_RESET);
+  DiagPinMode(&sck, GPIO_MODE_OUTPUT_PP, GPIO_NOPULL);
+
+  uint8_t idle[2][3];
+  for (int swapped = 0; swapped <= 1; swapped++)
+  {
+    DiagJedec(&cs_list[n_cs - 1], swapped ? &line_d12 : &line_d11, swapped ? &line_d11 : &line_d12,
+              &sck, idle[swapped]);
+  }
+
+  const char *found_cs = NULL;
+  int found_swapped = 0;
+  int any_driven = 0;
+  for (int c = 0; c < n_cs - 1; c++)
+  {
+    for (int swapped = 0; swapped <= 1; swapped++)
+    {
+      const DiagPin *mosi = swapped ? &line_d12 : &line_d11;
+      const DiagPin *miso = swapped ? &line_d11 : &line_d12;
+      uint8_t id[3];
+      DiagJedec(&cs_list[c], mosi, miso, &sck, id);
+      int driven = memcmp(id, idle[swapped], 3) != 0;
+      any_driven |= driven;
+      int ok = id[0] == 0xC8U && id[1] == 0x40U && id[2] == 0x18U;
+      printf("  CS=%-3s DI->%s DO->%s : %02X %02X %02X  %s%s\r\n", cs_list[c].name,
+             mosi->name, miso->name, id[0], id[1], id[2],
+             driven ? "someone answers" : "no answer (same as nothing selected)", ok ? "  <== FLASH" : "");
+      if (ok && found_cs == NULL)
+      {
+        found_cs = cs_list[c].name;
+        found_swapped = swapped;
+      }
+    }
+  }
+
+  if (found_cs != NULL && strcmp(found_cs, "D10") == 0 && !found_swapped)
+  {
+    printf("VERDICT: flash wiring is correct.\r\n");
+  }
+  else if (found_cs != NULL)
+  {
+    printf("VERDICT: flash answers with CS on %s%s.\r\n", found_cs,
+           found_swapped ? " and DI/DO SWAPPED (DI must go to D11 row, DO to D12 row)" : "");
+    if (strcmp(found_cs, "D10") != 0)
+    {
+      printf("         -> move the flash CS wire to D10.\r\n");
+    }
+  }
+  else if (!any_driven)
+  {
+    printf("VERDICT: nobody drives the answer line. Check flash DO -> D12 row, CLK -> D13 row,\r\n"
+           "         3V3/GND of the flash, and HOLD/WP if the module has them.\r\n");
+  }
+  else
+  {
+    printf("VERDICT: something answers but never the flash ID. Likely CLK (D13 row) or DI\r\n"
+           "         (D11 row) of the flash is not connected, so it never gets the command.\r\n");
+  }
+
+  /* Give the pins back to SPI1 and restore the chip selects. */
+  DiagPinMode(&cs_list[2], GPIO_MODE_INPUT, GPIO_NOPULL);
+  HAL_SPI_Init(&hspi1);
+  HAL_GPIO_WritePin(FLASH_CS_GPIO_Port, FLASH_CS_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(IMU_CS_GPIO_Port, IMU_CS_Pin, GPIO_PIN_SET);
+  printf("--- end of wiring check ---\r\n");
 }
 
 /* ---------------- GPS MAX-M10S (USART1, 9600 baud) ---------------- */
@@ -817,13 +1086,20 @@ int main(void)
   MX_I2C1_Init();
   MX_SPI1_Init();
   MX_USART1_UART_Init();
+  MX_SPI3_Init();
   /* USER CODE BEGIN 2 */
   setvbuf(stdout, NULL, _IONBF, 0);
   FlashDeselect();
+  ImuCsInit();
   HAL_Delay(100);
   printf("\r\n=== hab_bringup: BMP390 + SPI flash + GPS ===\r\n");
+#if WIRING_DIAG
+  FlashWiringCheck();
+#endif
 
   FlashBootTest();
+
+  int imu_ok = ImuInit() == 0;
   FlashNoEraseDemo();
 
   int bmp_ok = BmpInit() == 0;
@@ -868,6 +1144,10 @@ int main(void)
     last_print += 1000U;
 
     GpsPrintStatus();
+    if (imu_ok)
+    {
+      ImuPrintStatus();
+    }
     double temp_c, press_pa;
     if (bmp_ok && BmpReadData(&temp_c, &press_pa) == 0)
     {
@@ -1120,6 +1400,46 @@ static void MX_SPI1_Init(void)
 }
 
 /**
+  * @brief SPI3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_SPI3_Init(void)
+{
+
+  /* USER CODE BEGIN SPI3_Init 0 */
+
+  /* USER CODE END SPI3_Init 0 */
+
+  /* USER CODE BEGIN SPI3_Init 1 */
+
+  /* USER CODE END SPI3_Init 1 */
+  /* SPI3 parameter configuration*/
+  hspi3.Instance = SPI3;
+  hspi3.Init.Mode = SPI_MODE_MASTER;
+  hspi3.Init.Direction = SPI_DIRECTION_2LINES;
+  hspi3.Init.DataSize = SPI_DATASIZE_8BIT;
+  hspi3.Init.CLKPolarity = SPI_POLARITY_LOW;
+  hspi3.Init.CLKPhase = SPI_PHASE_1EDGE;
+  hspi3.Init.NSS = SPI_NSS_SOFT;
+  hspi3.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_128;
+  hspi3.Init.FirstBit = SPI_FIRSTBIT_MSB;
+  hspi3.Init.TIMode = SPI_TIMODE_DISABLE;
+  hspi3.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+  hspi3.Init.CRCPolynomial = 7;
+  hspi3.Init.CRCLength = SPI_CRC_LENGTH_DATASIZE;
+  hspi3.Init.NSSPMode = SPI_NSS_PULSE_ENABLE;
+  if (HAL_SPI_Init(&hspi3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN SPI3_Init 2 */
+
+  /* USER CODE END SPI3_Init 2 */
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -1138,7 +1458,17 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_7, GPIO_PIN_SET);
+
+  /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(FLASH_CS_GPIO_Port, FLASH_CS_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin : PC7 */
+  GPIO_InitStruct.Pin = GPIO_PIN_7;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   /*Configure GPIO pin : FLASH_CS_Pin */
   GPIO_InitStruct.Pin = FLASH_CS_Pin;
