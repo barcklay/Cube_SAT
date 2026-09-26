@@ -36,6 +36,7 @@ WHITE = "\033[97m"
 
 RE_GPS = re.compile(r"GPS: UTC (\S*)\s+fix=(\d+)\s+used=(\d+)\s+in_view=(\d+)(?:.*?alt=(-?[\d.]+) m)?(?:.*?model@boot=(-?\d+))?")
 RE_IMU = re.compile(r"IMU: acc g x=(-?[\d.]+) y=(-?[\d.]+) z=(-?[\d.]+)\s+gyro dps x=(-?[\d.]+) y=(-?[\d.]+) z=(-?[\d.]+)")
+RE_OUT = re.compile(r"DS18B20: T=(-?[\d.]+) C")
 RE_BMP = re.compile(r"^T=(-?[\d.]+) C\s+P=(-?[\d.]+) Pa\s+alt=(-?[\d.]+) m\s+rel=(-?[\d.]+) m")
 
 # Boot messages worth showing (dimmed) when the board restarts.
@@ -43,6 +44,7 @@ BOOT_PATTERNS = [
     (re.compile(r"Flash JEDEC: (.*)"), lambda m: f"FLASH  JEDEC {m.group(1)}", lambda m: m.group(1).strip() == "C8 40 18"),
     (re.compile(r"boot_count now (\d+)"), lambda m: f"FLASH  boot #{m.group(1)} logged", lambda m: True),
     (re.compile(r"IMU WHO_AM_I: (0x[0-9A-F]+)"), lambda m: f"IMU    ICM-42688-P id {m.group(1)}", lambda m: m.group(1) == "0x47"),
+    (re.compile(r"DS18B20 ROM: .*family (0x[0-9A-F]+)"), lambda m: f"TEMP   DS18B20 family {m.group(1)}", lambda m: m.group(1) == "0x28"),
     (re.compile(r"BMP390 chip ID: (0x[0-9A-F]+)"), lambda m: f"BARO   BMP390 id {m.group(1)}", lambda m: m.group(1) == "0x60"),
     (re.compile(r"GPS: NMEA OK at (\d+) baud"), lambda m: f"GPS    link up, {m.group(1)} baud", lambda m: True),
     (re.compile(r"GPS set Airborne<4g: (\w+)"), lambda m: f"GPS    dynamic model AIRBORNE<4g -> {m.group(1)}", lambda m: m.group(1) == "ACK"),
@@ -77,11 +79,11 @@ def mission_time(t0):
 
 def banner():
     title = " HAB-1 · flight computer · NUCLEO-G474RE "
-    print(f"\n{BOLD}{WHITE}██{title}██{RST}   {DIM}GPS · BARO · IMU · FLASH{RST}")
+    print(f"\n{BOLD}{WHITE}██{title}██{RST}   {DIM}GPS · BARO · IMU · TEMP · FLASH{RST}")
     print(DIM + "─" * 96 + RST)
 
 
-def show_block(t0, gps, imu, bmp, airborne):
+def show_block(t0, gps, imu, bmp, airborne, out_c=None):
     tp = f"{DIM}{mission_time(t0)}{RST}"
     pad = " " * 12
 
@@ -98,7 +100,9 @@ def show_block(t0, gps, imu, bmp, airborne):
         temp_txt = ""
     else:
         baro_txt = f"BARO {bmp['p'] / 100:8.2f} hPa  rel {bmp['rel']:+6.2f} m"
-        temp_txt = f"{bmp['t']:5.1f} °C"
+        temp_txt = f"in {bmp['t']:5.1f} °C"
+    if out_c is not None:
+        temp_txt += f"  out {out_c:5.1f} °C"
 
     print(f"{tp}  {gps_txt} │ {baro_txt} │ {temp_txt}")
 
@@ -122,7 +126,7 @@ def main():
     t0 = time.time()
     fd = None
     buf = b""
-    gps = imu = bmp = None
+    gps = imu = bmp = out_c = None
     airborne = False
     lost_shown = False
 
@@ -181,11 +185,15 @@ def main():
                     v = [float(x) for x in m.groups()]
                     imu = dict(zip(["ax", "ay", "az", "gx", "gy", "gz"], v))
                     continue
+                m = RE_OUT.search(line)
+                if m:
+                    out_c = float(m.group(1))
+                    continue
                 m = RE_BMP.search(line)
                 if m:
                     bmp = {"t": float(m.group(1)), "p": float(m.group(2)), "rel": float(m.group(4))}
-                    show_block(t0, gps, imu, bmp, airborne)  # BMP line closes each 1 s tick
-                    gps = imu = bmp = None
+                    show_block(t0, gps, imu, bmp, airborne, out_c)  # BMP line closes each 1 s tick
+                    gps = imu = bmp = out_c = None
     except KeyboardInterrupt:
         pass
     finally:

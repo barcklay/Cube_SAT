@@ -121,6 +121,12 @@ typedef struct
 #define IMU_ACCEL_LSB_PER_G  2048.0  /* default range +-16 g */
 #define IMU_GYRO_LSB_PER_DPS 16.4    /* default range +-2000 deg/s */
 
+/* DS18B20 1-Wire commands */
+#define OW_CMD_READ_ROM     0x33U
+#define OW_CMD_SKIP_ROM     0xCCU
+#define OW_CMD_CONVERT_T    0x44U
+#define OW_CMD_READ_SCRATCH 0xBEU
+
 #define WIRING_DIAG      1  /* 1 = at boot, probe the SPI flash wiring and print a verdict */
 #define GPS_ECHO_NMEA    0  /* 1 = also print every valid NMEA sentence (for logging) */
 /* USER CODE END PD */
@@ -694,6 +700,175 @@ static void FlashWiringCheck(void)
   printf("--- end of wiring check ---\r\n");
 }
 
+/* ---------------- DS18B20 outside thermometer (1-Wire on PA10 = D2) ----------------
+   One data wire, open-drain: writing 0 pulls the line low, writing 1 releases it and
+   the 4.7k resistor pulls it back up. The sensor answers by pulling low too.
+   Every bit is a short, precisely timed low pulse, so we need a microsecond delay. */
+
+static void DelayUsInit(void)
+{
+  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;  /* enable the cycle counter */
+  DWT->CYCCNT = 0;
+  DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+}
+
+static void DelayUs(uint32_t us)
+{
+  uint32_t start = DWT->CYCCNT;
+  uint32_t ticks = us * (SystemCoreClock / 1000000U);
+  while (DWT->CYCCNT - start < ticks)
+  {
+  }
+}
+
+static void OwLow(void)
+{
+  HAL_GPIO_WritePin(DS18B20_GPIO_Port, DS18B20_Pin, GPIO_PIN_RESET);
+}
+
+static void OwRelease(void)
+{
+  HAL_GPIO_WritePin(DS18B20_GPIO_Port, DS18B20_Pin, GPIO_PIN_SET);
+}
+
+static int OwRead(void)
+{
+  return HAL_GPIO_ReadPin(DS18B20_GPIO_Port, DS18B20_Pin) == GPIO_PIN_SET;
+}
+
+/* Reset: low for 480 us, then a present sensor pulls the line low for 60-240 us. */
+static int OwReset(void)
+{
+  OwLow();
+  DelayUs(480);
+  __disable_irq();
+  OwRelease();
+  DelayUs(70);
+  int present = !OwRead();
+  __enable_irq();
+  DelayUs(410);
+  return present;
+}
+
+/* Bits go least significant first. A "1" is a short low pulse, a "0" a long one. */
+static void OwWriteByte(uint8_t b)
+{
+  for (int i = 0; i < 8; i++)
+  {
+    __disable_irq();
+    OwLow();
+    if (b & 1U)
+    {
+      DelayUs(6);
+      OwRelease();
+      DelayUs(64);
+    }
+    else
+    {
+      DelayUs(60);
+      OwRelease();
+      DelayUs(10);
+    }
+    __enable_irq();
+    b >>= 1;
+  }
+}
+
+/* Read: short low pulse, release, then sample: the sensor holds the line low for a "0". */
+static uint8_t OwReadByte(void)
+{
+  uint8_t b = 0;
+  for (int i = 0; i < 8; i++)
+  {
+    __disable_irq();
+    OwLow();
+    DelayUs(3);
+    OwRelease();
+    DelayUs(10);
+    if (OwRead())
+    {
+      b |= (uint8_t)(1U << i);
+    }
+    __enable_irq();
+    DelayUs(53);
+  }
+  return b;
+}
+
+/* Dallas/Maxim CRC-8 (polynomial x^8 + x^5 + x^4 + 1), checks ROM and scratchpad. */
+static uint8_t OwCrc8(const uint8_t *data, int len)
+{
+  uint8_t crc = 0;
+  for (int i = 0; i < len; i++)
+  {
+    uint8_t in = data[i];
+    for (int bit = 0; bit < 8; bit++)
+    {
+      uint8_t mix = (uint8_t)((crc ^ in) & 1U);
+      crc >>= 1;
+      if (mix)
+      {
+        crc ^= 0x8CU;
+      }
+      in >>= 1;
+    }
+  }
+  return crc;
+}
+
+static int Ds18b20Init(void)
+{
+  DelayUsInit();
+  if (!OwReset())
+  {
+    printf("DS18B20: no presence pulse (check yellow wire -> D2, 4.7k to 3V3, power)\r\n");
+    return -1;
+  }
+  uint8_t rom[8];
+  OwWriteByte(OW_CMD_READ_ROM);
+  for (int i = 0; i < 8; i++)
+  {
+    rom[i] = OwReadByte();
+  }
+  printf("DS18B20 ROM: %02X %02X%02X%02X%02X%02X%02X %02X  family 0x%02X (%s), CRC %s\r\n",
+         rom[0], rom[6], rom[5], rom[4], rom[3], rom[2], rom[1], rom[7], rom[0],
+         rom[0] == 0x28U ? "DS18B20" : "unexpected", OwCrc8(rom, 7) == rom[7] ? "OK" : "BAD");
+  return (rom[0] == 0x28U && OwCrc8(rom, 7) == rom[7]) ? 0 : -1;
+}
+
+/* Start a temperature conversion (12-bit takes up to 750 ms). */
+static void Ds18b20StartConversion(void)
+{
+  if (OwReset())
+  {
+    OwWriteByte(OW_CMD_SKIP_ROM);
+    OwWriteByte(OW_CMD_CONVERT_T);
+  }
+}
+
+/* Read the result of the last conversion. Returns 0 and the temperature, or -1. */
+static int Ds18b20ReadTemp(double *temp_c)
+{
+  if (!OwReset())
+  {
+    return -1;
+  }
+  OwWriteByte(OW_CMD_SKIP_ROM);
+  OwWriteByte(OW_CMD_READ_SCRATCH);
+  uint8_t sp[9];
+  for (int i = 0; i < 9; i++)
+  {
+    sp[i] = OwReadByte();
+  }
+  if (OwCrc8(sp, 8) != sp[8])
+  {
+    return -1;
+  }
+  int16_t raw = (int16_t)((uint16_t)sp[1] << 8 | sp[0]);  /* 1/16 degree steps */
+  *temp_c = raw / 16.0;
+  return 0;
+}
+
 /* ---------------- GPS MAX-M10S (USART1, 9600 baud) ---------------- */
 
 /* Interrupt: one byte arrived -> store it and ask for the next one. */
@@ -1120,6 +1295,12 @@ int main(void)
     printf(" Pa\r\n");
   }
 
+  int ds_ok = Ds18b20Init() == 0;
+  if (ds_ok)
+  {
+    Ds18b20StartConversion();
+  }
+
   GpsInit();
   uint32_t last_print = HAL_GetTick();
   /* USER CODE END 2 */
@@ -1147,6 +1328,22 @@ int main(void)
     if (imu_ok)
     {
       ImuPrintStatus();
+    }
+    if (ds_ok)
+    {
+      /* Conversion started one second ago is ready: read it, then start the next one. */
+      double out_c;
+      if (Ds18b20ReadTemp(&out_c) == 0)
+      {
+        printf("DS18B20: T=");
+        PrintFixed(out_c, 2);
+        printf(" C\r\n");
+      }
+      else
+      {
+        printf("DS18B20: read failed\r\n");
+      }
+      Ds18b20StartConversion();
     }
     double temp_c, press_pa;
     if (bmp_ok && BmpReadData(&temp_c, &press_pa) == 0)
@@ -1461,6 +1658,9 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_7, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(DS18B20_GPIO_Port, DS18B20_Pin, GPIO_PIN_SET);
+
+  /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(FLASH_CS_GPIO_Port, FLASH_CS_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : PC7 */
@@ -1469,6 +1669,13 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : DS18B20_Pin */
+  GPIO_InitStruct.Pin = DS18B20_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(DS18B20_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : FLASH_CS_Pin */
   GPIO_InitStruct.Pin = FLASH_CS_Pin;
