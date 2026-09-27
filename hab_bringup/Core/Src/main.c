@@ -95,7 +95,8 @@ typedef struct
   uint16_t boot;         /* boot number: shows where the board restarted */
   uint32_t index;        /* record number since the log was cleared = its slot number */
   TelemetryFrame frame;
-  uint8_t reserved[128 - 8 - sizeof(TelemetryFrame) - 2];
+  uint8_t reset_cause;   /* why the board last restarted (RESET_*), 0xFF in older records */
+  uint8_t reserved[128 - 8 - sizeof(TelemetryFrame) - 1 - 2];
   uint16_t crc;          /* CRC-16/CCITT of everything above */
 } LogRecord;
 _Static_assert(sizeof(LogRecord) == 128, "LogRecord must be 128 bytes");
@@ -181,12 +182,31 @@ _Static_assert(sizeof(LogRecord) == 128, "LogRecord must be 128 bytes");
 #define LOG_QUEUE_LEN    16U                     /* frames waiting while the flash is busy */
 #define FLASH_CMD_CHIP_ERASE 0xC7U
 
+/* Independent watchdog: its own 32 kHz oscillator, /64 -> 500 Hz, reload 999 -> 2 s. */
+#define IWDG_KEY_START   0xCCCCU
+#define IWDG_KEY_ACCESS  0x5555U
+#define IWDG_KEY_FEED    0xAAAAU
+#define IWDG_PRESCALER_64 4U
+#define IWDG_RELOAD_2S   999U
+
+#define RESET_POWER      1U
+#define RESET_PIN        2U  /* black RESET button or the programmer */
+#define RESET_SOFTWARE   3U
+#define RESET_WATCHDOG   4U
+#define RESET_BROWNOUT   5U
+
+#define FRAME_OK_GPSLINK 0x10U  /* GPS is sending data (fresh GGA in the last 3 s) */
+#define GPS_STALE_MS     3000U
+#define RETRY_EVERY_N    25U    /* re-try a lost sensor every 25 frames = 5 s */
+
 #define WIRING_DIAG      1  /* 1 = at boot, probe the SPI flash wiring and print a verdict */
 #define GPS_ECHO_NMEA    0  /* 1 = also print every valid NMEA sentence (for logging) */
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
+/* Init functions stay quiet when a lost sensor is being re-tried every few seconds. */
+#define INIT_PRINTF(...) do { if (init_verbose) { printf(__VA_ARGS__); } } while (0)
 
 /* USER CODE END PM */
 
@@ -217,7 +237,10 @@ static UbxFrame ubx;
 static int gsv_in_view[sizeof(GPS_TALKERS) - 1];  /* satellites in view per constellation */
 static uint32_t nmea_ok, nmea_bad;
 static int gps_boot_dynmodel = -1;
-static uint16_t boot_id;               /* boot counter from the boot record, stored in every log record */
+static uint16_t boot_id;
+static uint8_t reset_cause;
+static int init_verbose = 1;
+static uint32_t gps_last_gga_ms;  /* tick of the last good GGA sentence */               /* boot counter from the boot record, stored in every log record */
 
 /* Log state: next free slot, first slot that is not yet known to be erased, and a small
    queue for frames that arrive while the flash is busy erasing a sector. */
@@ -290,10 +313,10 @@ static int BmpInit(void)
   uint8_t id = 0;
   if (BmpRead(BMP_REG_CHIP_ID, &id, 1) != HAL_OK || id != 0x60U)
   {
-    printf("BMP390: not found (id=0x%02X)\r\n", (unsigned int)id);
+    INIT_PRINTF("BMP390: not found (id=0x%02X)\r\n", (unsigned int)id);
     return -1;
   }
-  printf("BMP390 chip ID: 0x%02X\r\n", (unsigned int)id);
+  INIT_PRINTF("BMP390 chip ID: 0x%02X\r\n", (unsigned int)id);
 
   BmpWrite(BMP_REG_CMD, 0xB6U);  /* soft reset */
   HAL_Delay(10);
@@ -302,7 +325,7 @@ static int BmpInit(void)
   uint8_t c[21];
   if (BmpRead(BMP_REG_CALIB, c, sizeof(c)) != HAL_OK)
   {
-    printf("BMP390: calibration read failed\r\n");
+    INIT_PRINTF("BMP390: calibration read failed\r\n");
     return -1;
   }
   bmp_cal.t1 = ldexp((uint16_t)(c[1] << 8 | c[0]), 8);
@@ -330,7 +353,7 @@ static int BmpInit(void)
   BmpRead(BMP_REG_ERR, &err, 1);
   if (err != 0)
   {
-    printf("BMP390: config error 0x%02X\r\n", (unsigned int)err);
+    INIT_PRINTF("BMP390: config error 0x%02X\r\n", (unsigned int)err);
     return -1;
   }
   return 0;
@@ -559,7 +582,7 @@ static void ImuDisableI2c(void)
   uint8_t before = ImuReadReg(IMU_REG_INTF_CONFIG0);
   ImuWriteReg(IMU_REG_INTF_CONFIG0, (uint8_t)((before & ~0x03U) | 0x03U));
   uint8_t after = ImuReadReg(IMU_REG_INTF_CONFIG0);
-  printf("IMU INTF_CONFIG0: 0x%02X -> 0x%02X (I2C off)\r\n", (unsigned int)before, (unsigned int)after);
+  INIT_PRINTF("IMU INTF_CONFIG0: 0x%02X -> 0x%02X (I2C off)\r\n", (unsigned int)before, (unsigned int)after);
 }
 
 /* Burst read: the register address auto-increments while CS stays low. */
@@ -575,7 +598,7 @@ static void ImuReadRegs(uint8_t reg, uint8_t *buf, uint16_t len)
 static int ImuInit(void)
 {
   uint8_t id = ImuReadReg(IMU_REG_WHO_AM_I);
-  printf("IMU WHO_AM_I: 0x%02X (%s)\r\n", (unsigned int)id,
+  INIT_PRINTF("IMU WHO_AM_I: 0x%02X (%s)\r\n", (unsigned int)id,
          id == IMU_WHO_AM_I_VAL ? "ICM-42688-P OK" : "unexpected");
   if (id != IMU_WHO_AM_I_VAL)
   {
@@ -759,9 +782,8 @@ static void FlashWiringCheck(void)
 
 static void DelayUsInit(void)
 {
-  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;  /* enable the cycle counter */
-  DWT->CYCCNT = 0;
-  DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;  /* enable the cycle counter (not reset: */
+  DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;              /* the frame loop measures time with it) */
 }
 
 static void DelayUs(uint32_t us)
@@ -873,7 +895,7 @@ static int Ds18b20Init(void)
   DelayUsInit();
   if (!OwReset())
   {
-    printf("DS18B20: no presence pulse (check yellow wire -> D2, 4.7k to 3V3, power)\r\n");
+    INIT_PRINTF("DS18B20: no presence pulse (check yellow wire -> D2, 4.7k to 3V3, power)\r\n");
     return -1;
   }
   uint8_t rom[8];
@@ -882,7 +904,7 @@ static int Ds18b20Init(void)
   {
     rom[i] = OwReadByte();
   }
-  printf("DS18B20 ROM: %02X %02X%02X%02X%02X%02X%02X %02X  family 0x%02X (%s), CRC %s\r\n",
+  INIT_PRINTF("DS18B20 ROM: %02X %02X%02X%02X%02X%02X%02X %02X  family 0x%02X (%s), CRC %s\r\n",
          rom[0], rom[6], rom[5], rom[4], rom[3], rom[2], rom[1], rom[7], rom[0],
          rom[0] == 0x28U ? "DS18B20" : "unexpected", OwCrc8(rom, 7) == rom[7] ? "OK" : "BAD");
   return (rom[0] == 0x28U && OwCrc8(rom, 7) == rom[7]) ? 0 : -1;
@@ -919,6 +941,66 @@ static int Ds18b20ReadTemp(double *temp_c)
   int16_t raw = (int16_t)((uint16_t)sp[1] << 8 | sp[0]);  /* 1/16 degree steps */
   *temp_c = raw / 16.0;
   return 0;
+}
+
+/* ---------------- Watchdog and reset cause ----------------
+   The IWDG counts down on its own oscillator. If the program does not "feed" it within
+   2 s (because it hung), the chip resets. Once started it cannot be stopped. */
+
+static void WatchdogStart(void)
+{
+  IWDG->KR = IWDG_KEY_START;
+  IWDG->KR = IWDG_KEY_ACCESS;       /* unlock the prescaler and reload registers */
+  IWDG->PR = IWDG_PRESCALER_64;
+  IWDG->RLR = IWDG_RELOAD_2S;
+  while (IWDG->SR != 0U)            /* wait until the new values are taken */
+  {
+  }
+  IWDG->KR = IWDG_KEY_FEED;
+}
+
+static void WatchdogFeed(void)
+{
+  IWDG->KR = IWDG_KEY_FEED;
+}
+
+/* RCC keeps flags telling why the chip restarted; read them once, then clear them. */
+static void ResetCauseCapture(void)
+{
+  uint32_t csr = RCC->CSR;
+  if (csr & RCC_CSR_IWDGRSTF)
+  {
+    reset_cause = RESET_WATCHDOG;
+  }
+  else if (csr & RCC_CSR_SFTRSTF)
+  {
+    reset_cause = RESET_SOFTWARE;
+  }
+  else if (csr & RCC_CSR_BORRSTF)
+  {
+    reset_cause = RESET_POWER;      /* power-on also sets the brown-out flag */
+  }
+  else if (csr & RCC_CSR_PINRSTF)
+  {
+    reset_cause = RESET_PIN;
+  }
+  else
+  {
+    reset_cause = RESET_BROWNOUT;
+  }
+  RCC->CSR |= RCC_CSR_RMVF;
+}
+
+static const char *ResetCauseName(uint8_t c)
+{
+  switch (c)
+  {
+    case RESET_POWER: return "power-on";
+    case RESET_PIN: return "reset pin / programmer";
+    case RESET_SOFTWARE: return "software";
+    case RESET_WATCHDOG: return "WATCHDOG (the program hung)";
+    default: return "other";
+  }
 }
 
 /* ---------------- Flight log in the SPI flash ----------------
@@ -1056,6 +1138,7 @@ static void LogPush(const TelemetryFrame *f)
   memset(r, 0xFF, sizeof(*r));
   r->magic = LOG_MAGIC;
   r->boot = boot_id;
+  r->reset_cause = reset_cause;
   r->frame = *f;
   log_q_head = next;
 }
@@ -1099,15 +1182,17 @@ static void LogService(void)
 /* Console command 'D': print the whole log as CSV. */
 static void LogDump(void)
 {
-  while (FlashBusy())
+  uint32_t t0 = HAL_GetTick();
+  while (FlashBusy() && HAL_GetTick() - t0 < 1000U)
   {
   }
   printf("LOGDUMP BEGIN %lu\r\n", (unsigned long)log_next);
   printf("index,boot,seq,t_ms,valid,baro_pa,baro_temp_c,baro_rel_m,ax_g,ay_g,az_g,"
-         "gx_dps,gy_dps,gz_dps,out_temp_c,gps_fix,gps_sats,gps_lat,gps_lon,gps_alt_m\r\n");
+         "gx_dps,gy_dps,gz_dps,out_temp_c,gps_fix,gps_sats,gps_lat,gps_lon,gps_alt_m,reset_cause\r\n");
   uint32_t bad = 0;
   for (uint32_t slot = 0; slot < log_next; slot++)
   {
+    WatchdogFeed();
     LogRecord r;
     if (LogCheckSlot(slot, &r) != 1)
     {
@@ -1140,7 +1225,7 @@ static void LogDump(void)
     PrintFixed(f->gps_lon_e7 / 1e7, 7);
     printf(",");
     PrintFixed(f->gps_alt_m, 1);
-    printf("\r\n");
+    printf(",%u\r\n", r.reset_cause);
   }
   printf("LOGDUMP END records=%lu broken=%lu\r\n", (unsigned long)(log_next - bad), (unsigned long)bad);
 }
@@ -1150,12 +1235,21 @@ static void LogErase(void)
 {
   printf("LOG: erase the whole flash? send Y within 5 s\r\n");
   uint8_t c = 0;
-  if (HAL_UART_Receive(&hlpuart1, &c, 1, 5000) != HAL_OK || (c != 'Y' && c != 'y'))
+  for (int i = 0; i < 50 && c == 0; i++)
+  {
+    WatchdogFeed();
+    if (HAL_UART_Receive(&hlpuart1, &c, 1, 100) != HAL_OK)
+    {
+      c = 0;
+    }
+  }
+  if (c != 'Y' && c != 'y')
   {
     printf("LOG: erase cancelled\r\n");
     return;
   }
-  while (FlashBusy())
+  uint32_t t0 = HAL_GetTick();
+  while (FlashBusy() && HAL_GetTick() - t0 < 1000U)
   {
   }
   printf("LOG: erasing chip");
@@ -1167,7 +1261,11 @@ static void LogErase(void)
   uint32_t start = HAL_GetTick();
   while (FlashBusy() && HAL_GetTick() - start < 200000U)
   {
-    HAL_Delay(1000);
+    for (int i = 0; i < 10; i++)
+    {
+      WatchdogFeed();
+      HAL_Delay(100);
+    }
     printf(".");
   }
   printf(" done in %lu s\r\n", (unsigned long)((HAL_GetTick() - start) / 1000U));
@@ -1277,6 +1375,7 @@ static void NmeaHandle(char *line)
   if (strcmp(type, "GGA") == 0 && n >= 10)
   {
     /* 1 UTC time, 2 lat, 3 N/S, 4 lon, 5 E/W, 6 fix quality, 7 sats used, 8 HDOP, 9 altitude */
+    gps_last_gga_ms = HAL_GetTick();
     strncpy(gps.utc, f[1], 6);
     gps.utc[6] = '\0';
     gps.fix_quality = atoi(f[6]);
@@ -1520,6 +1619,15 @@ static void GpsFillFrame(TelemetryFrame *f)
   {
     in_view += gsv_in_view[i];
   }
+  if (gps_last_gga_ms == 0 || HAL_GetTick() - gps_last_gga_ms > GPS_STALE_MS)
+  {
+    /* GPS went silent: do not pass old coordinates off as new ones. */
+    f->gps_fix = 0;
+    f->gps_sats = 0;
+    f->gps_in_view = 0;
+    return;
+  }
+  f->valid |= FRAME_OK_GPSLINK;
   f->gps_fix = (uint8_t)gps.fix_quality;
   f->gps_sats = (uint8_t)gps.sats_used;
   f->gps_in_view = (uint8_t)in_view;
@@ -1599,6 +1707,11 @@ int main(void)
   MX_SPI3_Init();
   /* USER CODE BEGIN 2 */
   setvbuf(stdout, NULL, _IONBF, 0);
+  /* The programmer (st-flash) sets "halt on reset" in the debug unit. That register
+     survives every reset except power-off, so a watchdog reset would stop the core
+     instead of restarting the program. Clear it: no programmer is attached in flight. */
+  CoreDebug->DEMCR &= ~CoreDebug_DEMCR_VC_CORERESET_Msk;
+  ResetCauseCapture();
   DelayUsInit();  /* cycle counter: microsecond delays and loop timing */
   FlashDeselect();
   ImuCsInit();
@@ -1609,6 +1722,7 @@ int main(void)
 #endif
 
   FlashBootTest();
+  printf("RESET cause: %s (boot %u)\r\n", ResetCauseName(reset_cause), boot_id);
   LogInit();
 
   int imu_ok = ImuInit() == 0;
@@ -1650,6 +1764,10 @@ int main(void)
   uint32_t stat_n = 0, stat_work_sum = 0, stat_work_max = 0, stat_print_max = 0;
   uint32_t stat_jitter_max = 0, overruns = 0;
   printf("LOOP: started, period %lu ms\r\n", (unsigned long)FRAME_PERIOD_MS);
+  init_verbose = 0;
+  uint16_t prev_valid = 0xFFFFU;
+  WatchdogStart();
+  printf("WATCHDOG: armed, 2 s\r\n");
   /* USER CODE END 2 */
 
   /* Initialize USER push-button, will be used to trigger an interrupt each time it's pressed.*/
@@ -1679,6 +1797,13 @@ int main(void)
         LogErase();
         next_ms = HAL_GetTick() + FRAME_PERIOD_MS;
       }
+      else if (cmd == 'H' || cmd == 'h')
+      {
+        printf("TEST: hanging the loop on purpose, the watchdog should reset the board in ~2 s\r\n");
+        while (1)
+        {
+        }
+      }
     }
     if ((int32_t)(HAL_GetTick() - next_ms) < 0)
     {
@@ -1686,6 +1811,7 @@ int main(void)
     }
 
     /* ---- a new frame is due ---- */
+    WatchdogFeed();  /* the loop is alive: tell the watchdog */
     uint32_t start_cyc = DWT->CYCCNT;
     uint32_t period_us = (start_cyc - prev_start_cyc) / cycles_per_us;
     prev_start_cyc = start_cyc;
@@ -1710,10 +1836,19 @@ int main(void)
       frame.baro_temp_c = (float)temp_c;
       frame.baro_rel_m = (float)PressureToAltitude(press_pa, ground_pa);
     }
-    if (imu_ok)
+    if (imu_ok && ImuReadReg(IMU_REG_WHO_AM_I) == IMU_WHO_AM_I_VAL)
     {
+      /* SPI never "fails" on its own, so check the IMU still answers before trusting data. */
       ImuRead(frame.acc_g, frame.gyro_dps);
       frame.valid |= FRAME_OK_IMU;
+    }
+    else
+    {
+      imu_ok = 0;
+    }
+    if (!ds_ok)
+    {
+      frame.valid &= (uint16_t)~FRAME_OK_OUT;
     }
     if (ds_ok && frame.seq % DS18B20_EVERY_N == 0U)
     {
@@ -1731,7 +1866,56 @@ int main(void)
       Ds18b20StartConversion();
     }
     GpsFillFrame(&frame);
+
+    /* A lost sensor is re-tried every 5 s; the rest of the system keeps flying meanwhile. */
+    if (frame.seq % RETRY_EVERY_N == 0U)
+    {
+      if (!(frame.valid & FRAME_OK_BARO))
+      {
+        HAL_I2C_DeInit(&hi2c1);  /* a stuck I2C bus is freed by re-initialising it */
+        MX_I2C1_Init();
+        bmp_ok = BmpInit() == 0;
+        if (bmp_ok && ground_pa == 0.0)
+        {
+          double t, p;
+          if (BmpReadData(&t, &p) == 0)
+          {
+            ground_pa = p;
+          }
+        }
+      }
+      if (!imu_ok)
+      {
+        imu_ok = ImuInit() == 0;
+      }
+      if (!ds_ok)
+      {
+        ds_ok = Ds18b20Init() == 0;
+        if (ds_ok)
+        {
+          Ds18b20StartConversion();
+        }
+      }
+    }
     frame.work_us = (DWT->CYCCNT - start_cyc) / cycles_per_us;
+
+    /* Report every change of sensor health once. */
+    if (frame.valid != prev_valid)
+    {
+      static const struct { uint16_t bit; const char *name; } sensors[] = {
+        {FRAME_OK_BARO, "BARO"}, {FRAME_OK_IMU, "IMU"}, {FRAME_OK_OUT, "OUT-TEMP"},
+        {FRAME_OK_GPSLINK, "GPS-LINK"}, {FRAME_OK_GPSFIX, "GPS-FIX"}};
+      for (unsigned i = 0; i < sizeof(sensors) / sizeof(sensors[0]); i++)
+      {
+        uint16_t now = frame.valid & sensors[i].bit;
+        uint16_t was = prev_valid & sensors[i].bit;
+        if (prev_valid != 0xFFFFU && now != was)
+        {
+          printf("HEALTH: %s %s\r\n", sensors[i].name, now ? "back" : "lost");
+        }
+      }
+      prev_valid = frame.valid;
+    }
 
     uint32_t print_start = DWT->CYCCNT;
     LogPush(&frame);
