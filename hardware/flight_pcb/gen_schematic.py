@@ -215,8 +215,16 @@ def uq(s):
     return s[1:-1] if s.startswith('"') else s
 
 
-def U():
-    return str(uuid.uuid4())
+_uid_n = [0]
+_NS = uuid.UUID("6b1d3a6e-5c2f-4a8e-9d3b-2f4c8a1e7b90")
+
+
+def U(key=None):
+    """Stable UUIDs: symbols are keyed by reference, other items by creation order."""
+    if key is None:
+        _uid_n[0] += 1
+        key = "item-%d" % _uid_n[0]
+    return str(uuid.uuid5(_NS, key))
 
 
 _lib_cache = {}
@@ -281,7 +289,7 @@ def fp_default(flat):
 # --------------------------------------------------------------------------------------
 # Schematic builder
 # --------------------------------------------------------------------------------------
-ROOT = U()
+ROOT = U("root-sheet")
 items = []
 lib_used = {}
 
@@ -308,19 +316,35 @@ def place_symbol(lib_id, ref, value, x, y, footprint=None, rot=0, extra_props=()
     lib_used[lib_id] = flat
     pins = sym_pins(flat)
     fp = footprint if footprint is not None else fp_default(flat)
+    if pins and not ref.startswith("#"):
+        xs = [px for px, py, *_ in pins.values()]
+        ys = [py for px, py, *_ in pins.values()]
+        val_just = ["left"]
+        if len(pins) > 20:      # the MCU: both texts under the body, clear of the pin labels
+            ref_at = (x - 7.62, y - min(ys) + 15.24)
+            val_at = (x - 7.62, y - min(ys) + 17.78)
+        elif lib_id.startswith("Device:") and len(pins) == 2 and max(xs) == min(xs):  # vertical R/C/LED/FB
+            ref_at = (x + 2.54, y - 1.27)
+            val_at = (x - 2.54, y + 1.27)
+            val_just = ["right"]
+        else:
+            ref_at = (x - 1.27, y - max(ys) - 3.81)
+            val_at = (x + max(max(xs), 2.54) + 3.81, y + 1.27)
+    else:
+        ref_at, val_at, val_just = (x + 2.54, y - 5.08), (x + 2.54, y + 5.08), ["left"]
     node = ["symbol", ["lib_id", q(lib_id)], ["at", fmt(x), fmt(y), str(rot)], ["unit", "1"],
             ["exclude_from_sim", "no"], ["in_bom", "yes"], ["on_board", "yes"], ["dnp", "no"],
-            ["uuid", q(U())],
-            ["property", q("Reference"), q(ref), ["at", fmt(x + 2.54), fmt(y - 5.08), "0"],
+            ["uuid", q(U("sym-" + ref))],
+            ["property", q("Reference"), q(ref), ["at", fmt(ref_at[0]), fmt(ref_at[1]), "0"],
              effects(justify=["left"], hide=ref.startswith("#"))],
-            ["property", q("Value"), q(value), ["at", fmt(x + 2.54), fmt(y + 5.08), "0"],
-             effects(justify=["left"])],
+            ["property", q("Value"), q(value), ["at", fmt(val_at[0]), fmt(val_at[1]), "0"],
+             effects(justify=val_just)],
             ["property", q("Footprint"), q(fp), ["at", fmt(x), fmt(y), "0"], effects(hide=True)],
             ["property", q("Datasheet"), q(""), ["at", fmt(x), fmt(y), "0"], effects(hide=True)]]
     for k, v in extra_props:
         node.append(["property", q(k), q(v), ["at", fmt(x), fmt(y), "0"], effects(hide=True)])
     for num in pins:
-        node.append(["pin", q(num), ["uuid", q(U())]])
+        node.append(["pin", q(num), ["uuid", q(U("pin-%s-%s" % (ref, num)))]])
     node.append(["instances", ["project", q(PROJECT),
                                ["path", q("/" + ROOT), ["reference", q(ref)], ["unit", "1"]]]])
     items.append(node)
@@ -386,7 +410,43 @@ def text(s, x, y, size=2.5):
 # --- MCU ---------------------------------------------------------------------------
 text("MCU  STM32G474RET6 (same chip and pins as the NUCLEO-G474RE bench)", 60, 40, 3)
 mcu = place_symbol("MCU_ST_STM32G4:STM32G474RETx", "U1", "STM32G474RET6", snap(130), snap(150))
-done = set()
+
+
+def wire(x1, y1, x2, y2):
+    items.append(["wire", ["pts", ["xy", fmt(x1), fmt(y1)], ["xy", fmt(x2), fmt(y2)]],
+                  ["stroke", ["width", "0"], ["type", "default"]], ["uuid", q(U())]])
+
+
+def junction(x, y):
+    items.append(["junction", ["at", fmt(x), fmt(y)], ["diameter", "0"],
+                  ["color", "0", "0", "0", "0"], ["uuid", q(U())]])
+
+
+STUB = 5.08
+groups = {}
+for num, (x, y, ang, name, typ) in mcu.items():
+    net = MCU_POWER.get(name)
+    if net in POWER_NETS:
+        groups.setdefault((net, ang), {})[(x, y)] = True
+bussed = set()
+for (net, ang), pts in groups.items():
+    pts = sorted(pts)
+    dx, dy = {0: (-STUB, 0), 180: (STUB, 0), 90: (0, STUB), 270: (0, -STUB)}[ang]
+    ends = []
+    for (x, y) in pts:
+        wire(x, y, x + dx, y + dy)
+        ends.append((round(x + dx, 2), round(y + dy, 2)))
+        bussed.add((x, y))
+    if len(ends) > 1:
+        wire(*ends[0], *ends[-1])
+        for e in ends[1:-1]:
+            junction(*e)
+    ex, ey = ends[len(ends) // 2]
+    if len(ends) > 1:
+        junction(ex, ey)
+    connect(net, ex, ey, ang)
+
+done = set(bussed)
 for num, (x, y, ang, name, typ) in sorted(mcu.items()):
     # a pin name can carry several functions: "PB8-BOOT0", "PG10-NRST", "PC14-OSC32_IN"
     net = next((MCU_NETS[x] for x in [name] + name.split("-") if x in MCU_NETS), None) \
