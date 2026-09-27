@@ -64,6 +64,28 @@ typedef struct
   uint8_t payload[64];
   int ready;
 } UbxFrame;
+
+/* One telemetry frame: everything the flight computer knows at one moment.
+   Filled every FRAME_PERIOD_MS; later written to flash (HW-16) and sent by radio (HW-13). */
+typedef struct
+{
+  uint32_t seq;         /* frame number since boot */
+  uint32_t t_ms;        /* time since boot when the frame was taken */
+  uint16_t valid;       /* FRAME_OK_* bits: which sensors answered */
+  float baro_pa;
+  float baro_temp_c;
+  float baro_rel_m;     /* altitude relative to the pressure at power-on */
+  float acc_g[3];
+  float gyro_dps[3];
+  float out_temp_c;     /* DS18B20, refreshed once per second */
+  uint8_t gps_fix;
+  uint8_t gps_sats;
+  uint8_t gps_in_view;
+  int32_t gps_lat_e7;   /* degrees * 1e7, like u-blox */
+  int32_t gps_lon_e7;
+  float gps_alt_m;
+  uint32_t work_us;     /* time spent reading sensors in this cycle */
+} TelemetryFrame;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -126,6 +148,14 @@ typedef struct
 #define OW_CMD_SKIP_ROM     0xCCU
 #define OW_CMD_CONVERT_T    0x44U
 #define OW_CMD_READ_SCRATCH 0xBEU
+
+#define FRAME_PERIOD_MS  200U  /* 5 frames per second */
+#define DS18B20_EVERY_N  5U    /* DS18B20 needs 750 ms per conversion: read it once per second */
+#define LOOP_STATS_EVERY 25U   /* print loop timing statistics every 25 frames = 5 s */
+#define FRAME_OK_BARO    0x01U
+#define FRAME_OK_IMU     0x02U
+#define FRAME_OK_OUT     0x04U
+#define FRAME_OK_GPSFIX  0x08U
 
 #define WIRING_DIAG      1  /* 1 = at boot, probe the SPI flash wiring and print a verdict */
 #define GPS_ECHO_NMEA    0  /* 1 = also print every valid NMEA sentence (for logging) */
@@ -522,31 +552,18 @@ static int ImuInit(void)
   return 0;
 }
 
-/* Raw 16-bit values -> g, deg/s and deg C (datasheet: temp = raw / 132.48 + 25). */
-static void ImuPrintStatus(void)
+/* Raw 16-bit big-endian values (after 2 temperature bytes) -> g and deg/s. */
+static void ImuRead(float acc_g[3], float gyro_dps[3])
 {
   uint8_t d[14];
   ImuReadRegs(IMU_REG_TEMP_DATA1, d, sizeof(d));
-  int16_t raw[7];
-  for (int i = 0; i < 7; i++)
+  for (int i = 0; i < 3; i++)
   {
-    raw[i] = (int16_t)((uint16_t)d[2 * i] << 8 | d[2 * i + 1]);
+    int16_t a = (int16_t)((uint16_t)d[2 + 2 * i] << 8 | d[3 + 2 * i]);
+    int16_t g = (int16_t)((uint16_t)d[8 + 2 * i] << 8 | d[9 + 2 * i]);
+    acc_g[i] = (float)(a / IMU_ACCEL_LSB_PER_G);
+    gyro_dps[i] = (float)(g / IMU_GYRO_LSB_PER_DPS);
   }
-  printf("IMU: acc g x=");
-  PrintFixed(raw[1] / IMU_ACCEL_LSB_PER_G, 2);
-  printf(" y=");
-  PrintFixed(raw[2] / IMU_ACCEL_LSB_PER_G, 2);
-  printf(" z=");
-  PrintFixed(raw[3] / IMU_ACCEL_LSB_PER_G, 2);
-  printf("  gyro dps x=");
-  PrintFixed(raw[4] / IMU_GYRO_LSB_PER_DPS, 1);
-  printf(" y=");
-  PrintFixed(raw[5] / IMU_GYRO_LSB_PER_DPS, 1);
-  printf(" z=");
-  PrintFixed(raw[6] / IMU_GYRO_LSB_PER_DPS, 1);
-  printf("  T=");
-  PrintFixed(raw[0] / 132.48 + 25.0, 1);
-  printf(" C\r\n");
 }
 
 /* ---------------- Wiring check for the SPI flash ----------------
@@ -1204,27 +1221,54 @@ static void GpsInit(void)
   printf("GPS dynModel now: RAM=%d (%s)\r\n", ram, DynModelName(ram));
 }
 
-static void GpsPrintStatus(void)
+/* Copy the latest parsed GPS data into the frame (GPS itself updates once per second). */
+static void GpsFillFrame(TelemetryFrame *f)
 {
   int in_view = 0;
   for (unsigned i = 0; i < sizeof(gsv_in_view) / sizeof(gsv_in_view[0]); i++)
   {
     in_view += gsv_in_view[i];
   }
-  printf("GPS: UTC %.2s:%.2s:%.2s  fix=%d  used=%d  in_view=%d",
-         gps.utc, gps.utc + 2, gps.utc + 4, gps.fix_quality, gps.sats_used, in_view);
+  f->gps_fix = (uint8_t)gps.fix_quality;
+  f->gps_sats = (uint8_t)gps.sats_used;
+  f->gps_in_view = (uint8_t)in_view;
   if (gps.fix_quality > 0)
   {
-    printf("  lat=");
-    PrintFixed(gps.lat_deg, 6);
-    printf("  lon=");
-    PrintFixed(gps.lon_deg, 6);
-    printf("  alt=");
-    PrintFixed(gps.alt_m, 1);
-    printf(" m");
+    f->valid |= FRAME_OK_GPSFIX;
+    f->gps_lat_e7 = (int32_t)lround(gps.lat_deg * 1e7);
+    f->gps_lon_e7 = (int32_t)lround(gps.lon_deg * 1e7);
+    f->gps_alt_m = (float)gps.alt_m;
   }
-  printf("  model@boot=%d  (nmea ok=%lu bad=%lu lost=%lu)\r\n", gps_boot_dynmodel,
-         (unsigned long)nmea_ok, (unsigned long)nmea_bad, (unsigned long)gps_rx_overflow);
+}
+
+/* ---------------- The frame: one line per frame on the console ---------------- */
+
+static void FramePrint(const TelemetryFrame *f)
+{
+  printf("FRM seq=%lu t=%lu | BARO p=", (unsigned long)f->seq, (unsigned long)f->t_ms);
+  PrintFixed(f->baro_pa, 2);
+  printf(" T=");
+  PrintFixed(f->baro_temp_c, 2);
+  printf(" rel=");
+  PrintFixed(f->baro_rel_m, 2);
+  printf(" | IMU a=");
+  PrintFixed(f->acc_g[0], 2);
+  printf(",");
+  PrintFixed(f->acc_g[1], 2);
+  printf(",");
+  PrintFixed(f->acc_g[2], 2);
+  printf(" g=");
+  PrintFixed(f->gyro_dps[0], 1);
+  printf(",");
+  PrintFixed(f->gyro_dps[1], 1);
+  printf(",");
+  PrintFixed(f->gyro_dps[2], 1);
+  printf(" | GPS fix=%u sats=%u view=%u alt=", f->gps_fix, f->gps_sats, f->gps_in_view);
+  PrintFixed(f->gps_alt_m, 1);
+  printf(" | OUT T=");
+  PrintFixed(f->out_temp_c, 2);
+  printf(" | work=%lu valid=0x%02X model@boot=%d\r\n", (unsigned long)f->work_us,
+         (unsigned int)f->valid, gps_boot_dynmodel);
 }
 /* USER CODE END 0 */
 
@@ -1264,6 +1308,7 @@ int main(void)
   MX_SPI3_Init();
   /* USER CODE BEGIN 2 */
   setvbuf(stdout, NULL, _IONBF, 0);
+  DelayUsInit();  /* cycle counter: microsecond delays and loop timing */
   FlashDeselect();
   ImuCsInit();
   HAL_Delay(100);
@@ -1302,7 +1347,17 @@ int main(void)
   }
 
   GpsInit();
-  uint32_t last_print = HAL_GetTick();
+
+  /* Scheduler state. Each deadline is the previous deadline + period, so small
+     delays do not add up over time. Timing is measured with the cycle counter. */
+  const uint32_t cycles_per_us = SystemCoreClock / 1000000U;
+  TelemetryFrame frame;
+  memset(&frame, 0, sizeof(frame));
+  uint32_t next_ms = HAL_GetTick() + FRAME_PERIOD_MS;
+  uint32_t prev_start_cyc = DWT->CYCCNT;
+  uint32_t stat_n = 0, stat_work_sum = 0, stat_work_max = 0, stat_print_max = 0;
+  uint32_t stat_jitter_max = 0, overruns = 0;
+  printf("LOOP: started, period %lu ms\r\n", (unsigned long)FRAME_PERIOD_MS);
   /* USER CODE END 2 */
 
   /* Initialize USER push-button, will be used to trigger an interrupt each time it's pressed.*/
@@ -1316,51 +1371,82 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    /* GPS bytes arrive all the time, so read them on every pass; print once per second. */
+    /* Between frames: keep draining GPS bytes (they arrive all the time). */
     GpsPoll();
-    if (HAL_GetTick() - last_print < 1000U)
+    if ((int32_t)(HAL_GetTick() - next_ms) < 0)
     {
       continue;
     }
-    last_print += 1000U;
 
-    GpsPrintStatus();
+    /* ---- a new frame is due ---- */
+    uint32_t start_cyc = DWT->CYCCNT;
+    uint32_t period_us = (start_cyc - prev_start_cyc) / cycles_per_us;
+    prev_start_cyc = start_cyc;
+    uint32_t jitter_us = period_us > FRAME_PERIOD_MS * 1000U ? period_us - FRAME_PERIOD_MS * 1000U
+                                                             : FRAME_PERIOD_MS * 1000U - period_us;
+    next_ms += FRAME_PERIOD_MS;
+    if ((int32_t)(HAL_GetTick() - next_ms) >= 0)
+    {
+      overruns++;  /* we are already late for the next frame: skip ahead, do not pile up */
+      next_ms = HAL_GetTick() + FRAME_PERIOD_MS;
+    }
+
+    frame.seq++;
+    frame.t_ms = HAL_GetTick();
+    frame.valid &= FRAME_OK_OUT;  /* keep the last DS18B20 value between its 1 s reads */
+
+    double temp_c, press_pa;
+    if (bmp_ok && BmpReadData(&temp_c, &press_pa) == 0)
+    {
+      frame.valid |= FRAME_OK_BARO;
+      frame.baro_pa = (float)press_pa;
+      frame.baro_temp_c = (float)temp_c;
+      frame.baro_rel_m = (float)PressureToAltitude(press_pa, ground_pa);
+    }
     if (imu_ok)
     {
-      ImuPrintStatus();
+      ImuRead(frame.acc_g, frame.gyro_dps);
+      frame.valid |= FRAME_OK_IMU;
     }
-    if (ds_ok)
+    if (ds_ok && frame.seq % DS18B20_EVERY_N == 0U)
     {
       /* Conversion started one second ago is ready: read it, then start the next one. */
       double out_c;
       if (Ds18b20ReadTemp(&out_c) == 0)
       {
-        printf("DS18B20: T=");
-        PrintFixed(out_c, 2);
-        printf(" C\r\n");
+        frame.out_temp_c = (float)out_c;
+        frame.valid |= FRAME_OK_OUT;
       }
       else
       {
-        printf("DS18B20: read failed\r\n");
+        frame.valid &= (uint16_t)~FRAME_OK_OUT;
       }
       Ds18b20StartConversion();
     }
-    double temp_c, press_pa;
-    if (bmp_ok && BmpReadData(&temp_c, &press_pa) == 0)
+    GpsFillFrame(&frame);
+    frame.work_us = (DWT->CYCCNT - start_cyc) / cycles_per_us;
+
+    uint32_t print_start = DWT->CYCCNT;
+    FramePrint(&frame);
+    uint32_t print_us = (DWT->CYCCNT - print_start) / cycles_per_us;
+
+    /* ---- loop statistics: is the period stable, how long does a frame take? ---- */
+    if (frame.seq > 1U)  /* the first period includes start-up, skip it */
     {
-      printf("T=");
-      PrintFixed2(temp_c);
-      printf(" C  P=");
-      PrintFixed2(press_pa);
-      printf(" Pa  alt=");
-      PrintFixed2(PressureToAltitude(press_pa, STD_SEA_LEVEL_PA));
-      printf(" m  rel=");
-      PrintFixed2(PressureToAltitude(press_pa, ground_pa));
-      printf(" m\r\n");
+      stat_n++;
+      stat_work_sum += frame.work_us;
+      stat_work_max = frame.work_us > stat_work_max ? frame.work_us : stat_work_max;
+      stat_print_max = print_us > stat_print_max ? print_us : stat_print_max;
+      stat_jitter_max = jitter_us > stat_jitter_max ? jitter_us : stat_jitter_max;
     }
-    else
+    if (stat_n >= LOOP_STATS_EVERY)
     {
-      printf("BMP390 read failed\r\n");
+      printf("LOOP: period %lu ms  frames %lu  jitter max %lu us  work avg %lu us max %lu us"
+             "  print max %lu us  overruns %lu  gps lost %lu\r\n",
+             (unsigned long)FRAME_PERIOD_MS, (unsigned long)stat_n, (unsigned long)stat_jitter_max,
+             (unsigned long)(stat_work_sum / stat_n), (unsigned long)stat_work_max,
+             (unsigned long)stat_print_max, (unsigned long)overruns, (unsigned long)gps_rx_overflow);
+      stat_n = stat_work_sum = stat_work_max = stat_print_max = stat_jitter_max = 0;
     }
   }
 
