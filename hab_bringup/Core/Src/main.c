@@ -86,6 +86,19 @@ typedef struct
   float gps_alt_m;
   uint32_t work_us;     /* time spent reading sensors in this cycle */
 } TelemetryFrame;
+
+/* One log record in the SPI flash: exactly half a 256-byte page, so records never
+   straddle a page. Erased flash reads 0xFF, so an unused slot has magic 0xFFFF. */
+typedef struct
+{
+  uint16_t magic;        /* LOG_MAGIC */
+  uint16_t boot;         /* boot number: shows where the board restarted */
+  uint32_t index;        /* record number since the log was cleared = its slot number */
+  TelemetryFrame frame;
+  uint8_t reserved[128 - 8 - sizeof(TelemetryFrame) - 2];
+  uint16_t crc;          /* CRC-16/CCITT of everything above */
+} LogRecord;
+_Static_assert(sizeof(LogRecord) == 128, "LogRecord must be 128 bytes");
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -157,6 +170,17 @@ typedef struct
 #define FRAME_OK_OUT     0x04U
 #define FRAME_OK_GPSFIX  0x08U
 
+/* Flight log in the SPI flash: sectors 0-1 are used by the boot test, the log starts at 8 KB. */
+#define LOG_MAGIC        0x474CU                 /* "LG" */
+#define LOG_START_ADDR   0x002000UL
+#define LOG_END_ADDR     0x1000000UL             /* 16 MB */
+#define LOG_RECORD_SIZE  128U
+#define SECTOR_SIZE      4096U
+#define LOG_PER_SECTOR   (SECTOR_SIZE / LOG_RECORD_SIZE)  /* 32 */
+#define LOG_SLOTS        ((LOG_END_ADDR - LOG_START_ADDR) / LOG_RECORD_SIZE)
+#define LOG_QUEUE_LEN    16U                     /* frames waiting while the flash is busy */
+#define FLASH_CMD_CHIP_ERASE 0xC7U
+
 #define WIRING_DIAG      1  /* 1 = at boot, probe the SPI flash wiring and print a verdict */
 #define GPS_ECHO_NMEA    0  /* 1 = also print every valid NMEA sentence (for logging) */
 /* USER CODE END PD */
@@ -192,7 +216,17 @@ static GpsData gps;
 static UbxFrame ubx;
 static int gsv_in_view[sizeof(GPS_TALKERS) - 1];  /* satellites in view per constellation */
 static uint32_t nmea_ok, nmea_bad;
-static int gps_boot_dynmodel = -1;  /* RAM value right after power-up, before we set it */
+static int gps_boot_dynmodel = -1;
+static uint16_t boot_id;               /* boot counter from the boot record, stored in every log record */
+
+/* Log state: next free slot, first slot that is not yet known to be erased, and a small
+   queue for frames that arrive while the flash is busy erasing a sector. */
+static uint32_t log_next;
+static uint32_t log_erased_to;
+static LogRecord log_queue[LOG_QUEUE_LEN];
+static uint32_t log_q_head, log_q_tail;
+static uint32_t log_written, log_dropped;
+static int log_full;  /* RAM value right after power-up, before we set it */
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -448,6 +482,7 @@ static void FlashBootTest(void)
 
   rec.magic = BOOT_MAGIC;
   rec.boot_count = prev + 1;
+  boot_id = (uint16_t)rec.boot_count;
   for (uint32_t i = 0; i < sizeof(rec.pattern); i++)
   {
     rec.pattern[i] = (uint8_t)(i + rec.boot_count);
@@ -886,6 +921,262 @@ static int Ds18b20ReadTemp(double *temp_c)
   return 0;
 }
 
+/* ---------------- Flight log in the SPI flash ----------------
+   Records are appended one after another. The flash only turns bits 1 -> 0, so each
+   sector is erased (all 0xFF) before we write into it; the next sector is erased in
+   advance, while the current one fills up, so the frame loop never waits for an erase.
+   After a reboot the log is scanned to find where it ended and continues from there. */
+
+static uint16_t Crc16Ccitt(const uint8_t *data, uint32_t len)
+{
+  uint16_t crc = 0xFFFFU;
+  while (len--)
+  {
+    crc ^= (uint16_t)(*data++ << 8);
+    for (int bit = 0; bit < 8; bit++)
+    {
+      crc = (crc & 0x8000U) ? (uint16_t)((crc << 1) ^ 0x1021U) : (uint16_t)(crc << 1);
+    }
+  }
+  return crc;
+}
+
+static uint32_t LogSlotAddr(uint32_t slot)
+{
+  return LOG_START_ADDR + slot * LOG_RECORD_SIZE;
+}
+
+static int FlashBusy(void)
+{
+  uint8_t cmd = FLASH_CMD_RDSR;
+  uint8_t sr = 0;
+  FlashSelect();
+  HAL_SPI_Transmit(&hspi1, &cmd, 1, 100);
+  HAL_SPI_Receive(&hspi1, &sr, 1, 100);
+  FlashDeselect();
+  return (sr & 0x01U) != 0;
+}
+
+/* Start a sector erase and return at once; the flash stays busy for up to ~0.4 s. */
+static void FlashStartErase(uint32_t addr)
+{
+  FlashWriteEnable();
+  FlashSelect();
+  FlashSendCmdAddr(FLASH_CMD_SE, addr);
+  FlashDeselect();
+}
+
+/* Start a page program and return at once; the flash stays busy for ~1-3 ms. */
+static void FlashStartProgram(uint32_t addr, const uint8_t *data, uint16_t len)
+{
+  FlashWriteEnable();
+  FlashSelect();
+  FlashSendCmdAddr(FLASH_CMD_PP, addr);
+  HAL_SPI_Transmit(&hspi1, (uint8_t *)data, len, 100);
+  FlashDeselect();
+}
+
+/* 1 = valid record for this slot, 0 = erased (all 0xFF), -1 = something else (broken). */
+static int LogCheckSlot(uint32_t slot, LogRecord *r)
+{
+  FlashRead(LogSlotAddr(slot), (uint8_t *)r, sizeof(*r));
+  if (r->magic == LOG_MAGIC && r->index == slot &&
+      r->crc == Crc16Ccitt((const uint8_t *)r, sizeof(*r) - 2))
+  {
+    return 1;
+  }
+  const uint8_t *b = (const uint8_t *)r;
+  for (uint32_t i = 0; i < sizeof(*r); i++)
+  {
+    if (b[i] != 0xFFU)
+    {
+      return -1;
+    }
+  }
+  return 0;
+}
+
+/* Find where the log ended: first by sectors (first slot of each sector), then inside
+   the last used sector. A record broken by a power cut is skipped, never overwritten. */
+static void LogInit(void)
+{
+  LogRecord r;
+  uint32_t sectors = LOG_SLOTS / LOG_PER_SECTOR;
+  uint32_t used = 0;
+  while (used < sectors && LogCheckSlot(used * LOG_PER_SECTOR, &r) == 1)
+  {
+    used++;
+  }
+
+  if (used == 0)
+  {
+    log_next = 0;
+    log_erased_to = 0;  /* nothing known to be erased: erase before the first write */
+  }
+  else
+  {
+    uint32_t base = (used - 1) * LOG_PER_SECTOR;
+    uint32_t slot = base;
+    uint16_t last_boot = 0;
+    while (slot < base + LOG_PER_SECTOR && LogCheckSlot(slot, &r) == 1)
+    {
+      last_boot = r.boot;
+      slot++;
+    }
+    uint32_t skipped = 0;
+    while (slot < base + LOG_PER_SECTOR && LogCheckSlot(slot, &r) != 0)
+    {
+      slot++;  /* half-written record from a power cut: leave it, go past it */
+      skipped++;
+    }
+    log_next = slot;
+    log_erased_to = base + LOG_PER_SECTOR;  /* this sector was erased before it was used */
+    printf("LOG: found %lu records, last from boot %u, %lu broken slot(s) skipped\r\n",
+           (unsigned long)log_next - skipped, last_boot, (unsigned long)skipped);
+  }
+  printf("LOG: writing from record %lu, room for %lu more (%lu min at 5 Hz)\r\n",
+         (unsigned long)log_next, (unsigned long)(LOG_SLOTS - log_next),
+         (unsigned long)((LOG_SLOTS - log_next) / 5U / 60U));
+}
+
+/* Called once per frame: wrap the frame into a record and queue it. */
+static void LogPush(const TelemetryFrame *f)
+{
+  if (log_full)
+  {
+    return;
+  }
+  uint32_t next = (log_q_head + 1U) % LOG_QUEUE_LEN;
+  if (next == log_q_tail)
+  {
+    log_dropped++;  /* flash busy for too long: queue is full */
+    return;
+  }
+  LogRecord *r = &log_queue[log_q_head];
+  memset(r, 0xFF, sizeof(*r));
+  r->magic = LOG_MAGIC;
+  r->boot = boot_id;
+  r->frame = *f;
+  log_q_head = next;
+}
+
+/* Called as often as possible: does at most one flash operation and never waits. */
+static void LogService(void)
+{
+  if (log_full || FlashBusy())
+  {
+    return;
+  }
+  if (log_q_tail != log_q_head)
+  {
+    if (log_next >= LOG_SLOTS)
+    {
+      log_full = 1;
+      printf("LOG: FULL, logging stopped\r\n");
+      return;
+    }
+    if (log_next >= log_erased_to)
+    {
+      FlashStartErase(LogSlotAddr(log_erased_to));  /* sector not erased yet: do it now */
+      log_erased_to += LOG_PER_SECTOR;
+      return;
+    }
+    LogRecord *r = &log_queue[log_q_tail];
+    r->index = log_next;
+    r->crc = Crc16Ccitt((const uint8_t *)r, sizeof(*r) - 2);
+    FlashStartProgram(LogSlotAddr(log_next), (const uint8_t *)r, sizeof(*r));
+    log_next++;
+    log_written++;
+    log_q_tail = (log_q_tail + 1U) % LOG_QUEUE_LEN;
+  }
+  else if (log_erased_to < log_next + 2U * LOG_PER_SECTOR && log_erased_to < LOG_SLOTS)
+  {
+    FlashStartErase(LogSlotAddr(log_erased_to));  /* nothing to write: erase ahead */
+    log_erased_to += LOG_PER_SECTOR;
+  }
+}
+
+/* Console command 'D': print the whole log as CSV. */
+static void LogDump(void)
+{
+  while (FlashBusy())
+  {
+  }
+  printf("LOGDUMP BEGIN %lu\r\n", (unsigned long)log_next);
+  printf("index,boot,seq,t_ms,valid,baro_pa,baro_temp_c,baro_rel_m,ax_g,ay_g,az_g,"
+         "gx_dps,gy_dps,gz_dps,out_temp_c,gps_fix,gps_sats,gps_lat,gps_lon,gps_alt_m\r\n");
+  uint32_t bad = 0;
+  for (uint32_t slot = 0; slot < log_next; slot++)
+  {
+    LogRecord r;
+    if (LogCheckSlot(slot, &r) != 1)
+    {
+      bad++;
+      continue;
+    }
+    const TelemetryFrame *f = &r.frame;
+    printf("%lu,%u,%lu,%lu,%u,", (unsigned long)r.index, r.boot, (unsigned long)f->seq,
+           (unsigned long)f->t_ms, (unsigned int)f->valid);
+    PrintFixed(f->baro_pa, 2);
+    printf(",");
+    PrintFixed(f->baro_temp_c, 2);
+    printf(",");
+    PrintFixed(f->baro_rel_m, 2);
+    for (int i = 0; i < 3; i++)
+    {
+      printf(",");
+      PrintFixed(f->acc_g[i], 3);
+    }
+    for (int i = 0; i < 3; i++)
+    {
+      printf(",");
+      PrintFixed(f->gyro_dps[i], 2);
+    }
+    printf(",");
+    PrintFixed(f->out_temp_c, 2);
+    printf(",%u,%u,", f->gps_fix, f->gps_sats);
+    PrintFixed(f->gps_lat_e7 / 1e7, 7);
+    printf(",");
+    PrintFixed(f->gps_lon_e7 / 1e7, 7);
+    printf(",");
+    PrintFixed(f->gps_alt_m, 1);
+    printf("\r\n");
+  }
+  printf("LOGDUMP END records=%lu broken=%lu\r\n", (unsigned long)(log_next - bad), (unsigned long)bad);
+}
+
+/* Console command 'E' then 'Y': erase the whole chip for a fresh log (30-100 s). */
+static void LogErase(void)
+{
+  printf("LOG: erase the whole flash? send Y within 5 s\r\n");
+  uint8_t c = 0;
+  if (HAL_UART_Receive(&hlpuart1, &c, 1, 5000) != HAL_OK || (c != 'Y' && c != 'y'))
+  {
+    printf("LOG: erase cancelled\r\n");
+    return;
+  }
+  while (FlashBusy())
+  {
+  }
+  printf("LOG: erasing chip");
+  FlashWriteEnable();
+  uint8_t cmd = FLASH_CMD_CHIP_ERASE;
+  FlashSelect();
+  HAL_SPI_Transmit(&hspi1, &cmd, 1, 100);
+  FlashDeselect();
+  uint32_t start = HAL_GetTick();
+  while (FlashBusy() && HAL_GetTick() - start < 200000U)
+  {
+    HAL_Delay(1000);
+    printf(".");
+  }
+  printf(" done in %lu s\r\n", (unsigned long)((HAL_GetTick() - start) / 1000U));
+  log_next = 0;
+  log_erased_to = LOG_SLOTS;  /* whole chip is erased now */
+  log_q_head = log_q_tail = 0;
+  log_full = 0;
+}
+
 /* ---------------- GPS MAX-M10S (USART1, 9600 baud) ---------------- */
 
 /* Interrupt: one byte arrived -> store it and ask for the next one. */
@@ -1318,6 +1609,7 @@ int main(void)
 #endif
 
   FlashBootTest();
+  LogInit();
 
   int imu_ok = ImuInit() == 0;
   FlashNoEraseDemo();
@@ -1371,8 +1663,23 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    /* Between frames: keep draining GPS bytes (they arrive all the time). */
+    /* Between frames: keep draining GPS bytes and feeding the log to the flash. */
     GpsPoll();
+    LogService();
+    uint8_t cmd;
+    if (HAL_UART_Receive(&hlpuart1, &cmd, 1, 0) == HAL_OK)
+    {
+      if (cmd == 'D' || cmd == 'd')
+      {
+        LogDump();
+        next_ms = HAL_GetTick() + FRAME_PERIOD_MS;
+      }
+      else if (cmd == 'E' || cmd == 'e')
+      {
+        LogErase();
+        next_ms = HAL_GetTick() + FRAME_PERIOD_MS;
+      }
+    }
     if ((int32_t)(HAL_GetTick() - next_ms) < 0)
     {
       continue;
@@ -1427,6 +1734,7 @@ int main(void)
     frame.work_us = (DWT->CYCCNT - start_cyc) / cycles_per_us;
 
     uint32_t print_start = DWT->CYCCNT;
+    LogPush(&frame);
     FramePrint(&frame);
     uint32_t print_us = (DWT->CYCCNT - print_start) / cycles_per_us;
 
@@ -1442,10 +1750,11 @@ int main(void)
     if (stat_n >= LOOP_STATS_EVERY)
     {
       printf("LOOP: period %lu ms  frames %lu  jitter max %lu us  work avg %lu us max %lu us"
-             "  print max %lu us  overruns %lu  gps lost %lu\r\n",
+             "  print max %lu us  overruns %lu  gps lost %lu  log %lu dropped %lu\r\n",
              (unsigned long)FRAME_PERIOD_MS, (unsigned long)stat_n, (unsigned long)stat_jitter_max,
              (unsigned long)(stat_work_sum / stat_n), (unsigned long)stat_work_max,
-             (unsigned long)stat_print_max, (unsigned long)overruns, (unsigned long)gps_rx_overflow);
+             (unsigned long)stat_print_max, (unsigned long)overruns, (unsigned long)gps_rx_overflow,
+             (unsigned long)log_next, (unsigned long)log_dropped);
       stat_n = stat_work_sum = stat_work_max = stat_print_max = stat_jitter_max = 0;
     }
   }

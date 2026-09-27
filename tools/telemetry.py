@@ -46,6 +46,8 @@ BOOT_PATTERNS = [
     (re.compile(r"Flash JEDEC: (.*)"), lambda m: f"FLASH  JEDEC {m.group(1)}", lambda m: m.group(1).strip() == "C8 40 18"),
     (re.compile(r"boot_count now (\d+)"), lambda m: f"FLASH  boot #{m.group(1)} logged", lambda m: True),
     (re.compile(r"IMU WHO_AM_I: (0x[0-9A-F]+)"), lambda m: f"IMU    ICM-42688-P id {m.group(1)}", lambda m: m.group(1) == "0x47"),
+    (re.compile(r"LOG: found (\d+) records, last from boot (\d+)"), lambda m: f"LOG    {m.group(1)} records kept (last boot {m.group(2)})", lambda m: True),
+    (re.compile(r"LOG: writing from record (\d+).*\((\d+) min"), lambda m: f"LOG    continuing at #{m.group(1)}, {m.group(2)} min free", lambda m: True),
     (re.compile(r"DS18B20 ROM: .*family (0x[0-9A-F]+)"), lambda m: f"TEMP   DS18B20 family {m.group(1)}", lambda m: m.group(1) == "0x28"),
     (re.compile(r"BMP390 chip ID: (0x[0-9A-F]+)"), lambda m: f"BARO   BMP390 id {m.group(1)}", lambda m: m.group(1) == "0x60"),
     (re.compile(r"GPS: NMEA OK at (\d+) baud"), lambda m: f"GPS    link up, {m.group(1)} baud", lambda m: True),
