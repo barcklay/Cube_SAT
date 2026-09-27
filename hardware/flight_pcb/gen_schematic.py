@@ -333,7 +333,9 @@ def place_symbol(lib_id, ref, value, x, y, footprint=None, rot=0, extra_props=()
     else:
         ref_at, val_at, val_just = (x + 2.54, y - 5.08), (x + 2.54, y + 5.08), ["left"]
     node = ["symbol", ["lib_id", q(lib_id)], ["at", fmt(x), fmt(y), str(rot)], ["unit", "1"],
-            ["exclude_from_sim", "no"], ["in_bom", "yes"], ["on_board", "yes"], ["dnp", "no"],
+            ["exclude_from_sim", "no"],
+            ["in_bom", "no" if lib_id.startswith(("Mechanical:", "Connector:TestPoint")) else "yes"],
+            ["on_board", "yes"], ["dnp", "no"],
             ["uuid", q(U("sym-" + ref))],
             ["property", q("Reference"), q(ref), ["at", fmt(ref_at[0]), fmt(ref_at[1]), "0"],
              effects(justify=["left"], hide=ref.startswith("#"))],
@@ -476,8 +478,7 @@ for p in PARTS:
         cy += 12
         last_block = p["block"]
     px, py = snap(cx + 12), snap(cy + h / 2)
-    pins = place_symbol(p["lib_id"], p["ref"], p["value"], px, py, footprint=p["footprint"],
-                        extra_props=[("Note", p["note"])] if p["note"] else ())
+    pins = place_symbol(p["lib_id"], p["ref"], p["value"], px, py, footprint=p["footprint"])
     for num, (x, y, ang, name, typ) in pins.items():
         connect(p["pins"].get(num), x, y, ang)
     if p["note"]:

@@ -7042,15 +7042,6 @@
 				(hide yes)
 			)
 		)
-		(property "Note" "reverse-polarity protection: body diode drain->source"
-			(at 251.46 121.92 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
 		(pin "1"
 			(uuid "fa3dfa03-a749-5049-bdf8-818b12a6231a")
 		)
@@ -7279,15 +7270,6 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 251.46 170.18 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Note" "provisional, decide after HW-21"
 			(at 251.46 170.18 0)
 			(effects
 				(font
@@ -10011,15 +9993,6 @@
 				(hide yes)
 			)
 		)
-		(property "Note" "pin 13 VCP_RX (probe input) <- MCU TX; pin 14 VCP_TX -> MCU RX"
-			(at 332.74 104.14 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
 		(pin "1"
 			(uuid "f903a25e-6259-5a04-b78b-7ae3fadaf7ef")
 		)
@@ -11670,15 +11643,6 @@
 				(hide yes)
 			)
 		)
-		(property "Note" "order DI CLK GND DO CS 3V3 as on the bench module"
-			(at 332.74 401.32 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
 		(pin "1"
 			(uuid "52561ccc-9f25-5dc5-8102-b54f62c0d20e")
 		)
@@ -11914,15 +11878,6 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 332.74 436.88 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Note" "order VCC GND SCLK SDI SDO CS INT1 INT2 as on the GY-601N1 silkscreen"
 			(at 332.74 436.88 0)
 			(effects
 				(font
@@ -12187,15 +12142,6 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 332.74 472.44 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Note" "CONFIRM order: VCC GND SCK SDI SDO(=high, addr 0x77) CSB(=high, I2C)"
 			(at 332.74 472.44 0)
 			(effects
 				(font
@@ -12541,15 +12487,6 @@
 				(hide yes)
 			)
 		)
-		(property "Note" "CONFIRM order: VCC GND TX(module) RX(module)"
-			(at 332.74 500.38 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
 		(pin "1"
 			(uuid "af2f6da3-0941-5883-b251-887df5faa335")
 		)
@@ -12765,15 +12702,6 @@
 				(hide yes)
 			)
 		)
-		(property "Note" "red / yellow / black"
-			(at 332.74 528.32 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
 		(pin "1"
 			(uuid "8312482a-7d08-580b-8659-35f9662ed89e")
 		)
@@ -12967,15 +12895,6 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 411.48 78.74 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Note" "rev A: E22 on a header until HW-6 is done"
 			(at 411.48 78.74 0)
 			(effects
 				(font
@@ -13534,15 +13453,6 @@
 				(hide yes)
 			)
 		)
-		(property "Note" "CONFIRM order GND VCC SCL SDA"
-			(at 411.48 137.16 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
 		(pin "1"
 			(uuid "73822a96-7d00-517d-92b0-880a41a26999")
 		)
@@ -13729,7 +13639,7 @@
 		(at 411.48 175.26 0)
 		(unit 1)
 		(exclude_from_sim no)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
 		(dnp no)
 		(uuid "72e9fa06-bb15-558c-97fa-ac29b62c3fc8")
@@ -13844,7 +13754,7 @@
 		(at 411.48 195.58 0)
 		(unit 1)
 		(exclude_from_sim no)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
 		(dnp no)
 		(uuid "19f0e845-aad9-5258-9814-9d7081c62ac5")
@@ -13959,7 +13869,7 @@
 		(at 411.48 218.44 0)
 		(unit 1)
 		(exclude_from_sim no)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
 		(dnp no)
 		(uuid "3ab58fe4-c62a-5b63-9c43-6e394f0f096e")
@@ -14027,7 +13937,7 @@
 		(at 411.48 241.3 0)
 		(unit 1)
 		(exclude_from_sim no)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
 		(dnp no)
 		(uuid "5c24629b-406b-5e9e-8d1a-d3a87c93c096")
@@ -14095,7 +14005,7 @@
 		(at 411.48 261.62 0)
 		(unit 1)
 		(exclude_from_sim no)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
 		(dnp no)
 		(uuid "1789f878-0a30-51b0-9e57-293e10f0c988")
@@ -14163,7 +14073,7 @@
 		(at 411.48 284.48 0)
 		(unit 1)
 		(exclude_from_sim no)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
 		(dnp no)
 		(uuid "27c321e9-e4a1-5c85-9c0a-8776dde0601a")
@@ -14231,7 +14141,7 @@
 		(at 411.48 307.34 0)
 		(unit 1)
 		(exclude_from_sim no)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
 		(dnp no)
 		(uuid "64609e96-0ef3-57a8-800a-5507de7474a0")
@@ -14299,7 +14209,7 @@
 		(at 411.48 327.66 0)
 		(unit 1)
 		(exclude_from_sim no)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
 		(dnp no)
 		(uuid "a2331995-ecb9-51de-a746-d45ac1aac1a3")
@@ -14367,7 +14277,7 @@
 		(at 411.48 350.52 0)
 		(unit 1)
 		(exclude_from_sim no)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
 		(dnp no)
 		(uuid "e0c13279-b707-5c38-bb5b-1761229b3039")
@@ -14435,7 +14345,7 @@
 		(at 411.48 373.38 0)
 		(unit 1)
 		(exclude_from_sim no)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
 		(dnp no)
 		(uuid "a9cdaa7d-e376-5919-9f88-51a08a1a345c")
@@ -14514,7 +14424,7 @@
 		(at 411.48 406.4 0)
 		(unit 1)
 		(exclude_from_sim no)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
 		(dnp no)
 		(uuid "4e2c9d06-4907-5d1f-9f63-b1ffaedaaf26")
@@ -14568,7 +14478,7 @@
 		(at 411.48 429.26 0)
 		(unit 1)
 		(exclude_from_sim no)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
 		(dnp no)
 		(uuid "96f898b3-98f8-5893-9e21-ecf977152312")
@@ -14622,7 +14532,7 @@
 		(at 411.48 449.58 0)
 		(unit 1)
 		(exclude_from_sim no)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
 		(dnp no)
 		(uuid "a5c93e09-2d62-5d25-a6aa-1aec29249190")
@@ -14676,7 +14586,7 @@
 		(at 411.48 472.44 0)
 		(unit 1)
 		(exclude_from_sim no)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
 		(dnp no)
 		(uuid "30eaeedf-4167-5d61-b43b-66556a955b5b")
