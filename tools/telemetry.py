@@ -36,6 +36,8 @@ WHITE = "\033[97m"
 
 RE_GPS = re.compile(r"GPS: UTC (\S*)\s+fix=(\d+)\s+used=(\d+)\s+in_view=(\d+)(?:.*?alt=(-?[\d.]+) m)?(?:.*?model@boot=(-?\d+))?")
 RE_IMU = re.compile(r"IMU: acc g x=(-?[\d.]+) y=(-?[\d.]+) z=(-?[\d.]+)\s+gyro dps x=(-?[\d.]+) y=(-?[\d.]+) z=(-?[\d.]+)")
+RE_FRM = re.compile(r"^FRM seq=(\d+) t=(\d+) \| BARO p=(-?[\d.]+) T=(-?[\d.]+) rel=(-?[\d.]+) \| IMU a=(-?[\d.]+),(-?[\d.]+),(-?[\d.]+) g=(-?[\d.]+),(-?[\d.]+),(-?[\d.]+) \| GPS fix=(\d+) sats=(\d+) view=(\d+) alt=(-?[\d.]+) \| OUT T=(-?[\d.]+) \| work=(\d+) valid=0x([0-9A-F]+) model@boot=(-?\d+)")
+RE_LOOP = re.compile(r"^LOOP: period (\d+) ms\s+frames (\d+)\s+jitter max (\d+) us\s+work avg (\d+) us max (\d+) us\s+print max (\d+) us\s+overruns (\d+)")
 RE_OUT = re.compile(r"DS18B20: T=(-?[\d.]+) C")
 RE_BMP = re.compile(r"^T=(-?[\d.]+) C\s+P=(-?[\d.]+) Pa\s+alt=(-?[\d.]+) m\s+rel=(-?[\d.]+) m")
 
@@ -173,6 +175,28 @@ def main():
                             airborne = ok(m)
                         break
 
+                m = RE_FRM.search(line)
+                if m:
+                    # Firmware sends 5 frames per second; show one per second.
+                    v = m.groups()
+                    if int(v[0]) % 5 == 0:
+                        valid = int(v[17], 16)
+                        gps_f = {"fix": int(v[11]), "used": int(v[12]), "in_view": int(v[13]),
+                                 "alt": float(v[14])}
+                        imu_f = dict(zip(["ax", "ay", "az", "gx", "gy", "gz"], [float(x) for x in v[5:11]]))
+                        bmp_f = {"t": float(v[3]), "p": float(v[2]), "rel": float(v[4])}
+                        airborne = airborne or v[18] == "8"
+                        show_block(t0, gps_f, imu_f if valid & 0x02 else None, bmp_f if valid & 0x01 else None,
+                                   airborne, float(v[15]) if valid & 0x04 else None)
+                    continue
+                m = RE_LOOP.search(line)
+                if m:
+                    p, n, jit, wavg, wmax, pmax, ovr = m.groups()
+                    col = GREEN if ovr == "0" else RED
+                    print(f"{DIM}{mission_time(t0)}  LOOP   {p} ms x {n} frames · jitter {jit} us · "
+                          f"sensors {int(wavg) / 1000:.1f}/{int(wmax) / 1000:.1f} ms · print {int(pmax) / 1000:.1f} ms · "
+                          f"{RST}{col}overruns {ovr}{RST}")
+                    continue
                 m = RE_GPS.search(line)
                 if m:
                     gps = {"fix": int(m.group(2)), "used": int(m.group(3)), "in_view": int(m.group(4)),
