@@ -40,6 +40,7 @@ RE_FRM = re.compile(r"^FRM seq=(\d+) t=(\d+) \| BARO p=(-?[\d.]+) T=(-?[\d.]+) r
 RE_LOOP = re.compile(r"^LOOP: period (\d+) ms\s+frames (\d+)\s+jitter max (\d+) us\s+work avg (\d+) us max (\d+) us\s+print max (\d+) us\s+overruns (\d+)")
 RE_OUT = re.compile(r"DS18B20: T=(-?[\d.]+) C")
 RE_BMP = re.compile(r"^T=(-?[\d.]+) C\s+P=(-?[\d.]+) Pa\s+alt=(-?[\d.]+) m\s+rel=(-?[\d.]+) m")
+RE_HEALTH = re.compile(r"^HEALTH: (\S+) (lost|back)")
 
 # Boot messages worth showing (dimmed) when the board restarts.
 BOOT_PATTERNS = [
@@ -198,6 +199,15 @@ def main():
                     print(f"{DIM}{mission_time(t0)}  LOOP   {p} ms x {n} frames · jitter {jit} us · "
                           f"sensors {int(wavg) / 1000:.1f}/{int(wmax) / 1000:.1f} ms · print {int(pmax) / 1000:.1f} ms · "
                           f"{RST}{col}overruns {ovr}{RST}")
+                    continue
+                m = RE_HEALTH.search(line)
+                if m:
+                    # A sensor dropped out or came back (firmware prints it once per change).
+                    name, state = m.groups()
+                    if state == "lost":
+                        print(f"{RED}{BOLD}{mission_time(t0)}  HEALTH {name} LOST ✗{RST}")
+                    else:
+                        print(f"{GREEN}{BOLD}{mission_time(t0)}  HEALTH {name} back ✓{RST}")
                     continue
                 m = RE_GPS.search(line)
                 if m:
