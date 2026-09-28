@@ -48,12 +48,15 @@ def main():
         ready, _, _ = select.select([fd], [], [], 0.2)
         if not ready:
             continue
-        buf += os.read(fd, 4096)
+        try:
+            buf += os.read(fd, 4096)
+        except BlockingIOError:  # select() can wake up with nothing to read yet
+            continue
         last_data = time.time()
         while b"\n" in buf:
             raw, buf = buf.split(b"\n", 1)
             line = raw.decode(errors="replace").strip()
-            if line.startswith("LOGDUMP BEGIN"):
+            if "LOGDUMP BEGIN" in line:  # may share a line with a half-printed frame
                 started = True
                 print(f"downloading {line.split()[-1]} records…")
                 continue

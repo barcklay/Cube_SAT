@@ -938,6 +938,13 @@ static int Ds18b20ReadTemp(double *temp_c)
   {
     return -1;
   }
+  /* A floating or shorted data line reads all zeros, and the CRC of all zeros is 0, so the
+     CRC alone passes it (seen as a fake 0.0 C when the probe wire was pulled). Check the
+     bits the DS18B20 always sets: config register 0bx11111 and reserved byte 5 = 0xFF. */
+  if ((sp[4] & 0x9FU) != 0x1FU || sp[5] != 0xFFU)
+  {
+    return -1;
+  }
   int16_t raw = (int16_t)((uint16_t)sp[1] << 8 | sp[0]);  /* 1/16 degree steps */
   *temp_c = raw / 16.0;
   return 0;
