@@ -1,0 +1,590 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>HAB-1 Лаборатория</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+/* One visual world: a camera hanging in the stratosphere. Single dark look on purpose. */
+:root{
+  color-scheme:dark;
+  --space:#04060B; --glass:rgba(8,12,20,.58); --glass-hi:rgba(14,20,32,.78); --edge:rgba(255,255,255,.12);
+  --txt:#E9EEF4; --dim:#93A3B5; --faint:#5E6E80;
+  --hab:#FF6B2C; --hab-soft:rgba(255,107,44,.16);
+  --ok:#5BD39A; --warn:#F5B942; --bad:#FF6F6F;
+  --display:"Unbounded","Arial Black",system-ui,sans-serif;
+  --body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{margin:0;background:var(--space);color:var(--txt);font:14px/1.5 var(--body);overflow:hidden}
+#scene{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
+button{font:500 12px/1 var(--body);color:var(--txt);background:var(--glass);border:1px solid var(--edge);border-radius:4px;padding:8px 11px;cursor:pointer;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+button:hover{border-color:rgba(255,255,255,.3)}
+button:focus-visible,input:focus-visible{outline:2px solid var(--hab);outline-offset:2px}
+button[aria-pressed="true"]{background:var(--txt);color:#0A0E14;border-color:var(--txt)}
+.lbl{font:500 10px/1.2 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+.glass{background:var(--glass);border:1px solid var(--edge);border-radius:6px;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+
+/* HUD grid over the scene */
+.hud{position:fixed;inset:0;pointer-events:none;display:grid;
+  grid-template-columns:minmax(0,1fr) minmax(0,340px);grid-template-rows:auto minmax(0,1fr) auto;
+  gap:14px;padding:calc(18px + env(safe-area-inset-top,0px)) 20px calc(16px + env(safe-area-inset-bottom,0px))}
+.hud>*{pointer-events:auto}
+.top{grid-column:1 / -1;display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;pointer-events:none}
+.top>*{pointer-events:auto}
+.brand{display:grid;gap:4px}
+.brand h1{margin:0;font:700 26px/1 var(--display);letter-spacing:-.01em}
+.brand h1 b{color:var(--hab);font-weight:700}
+.brand p{margin:0;color:var(--dim);font-size:13px;max-width:44ch}
+.views{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+
+.left{grid-column:1;grid-row:2;align-self:end;display:grid;gap:10px;justify-items:start;pointer-events:none;padding-bottom:6px}
+.alt{font:700 clamp(44px,7vw,84px)/.9 var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.03em;text-shadow:0 2px 24px rgba(0,0,0,.45)}
+.alt small{font:500 .3em var(--mono);color:var(--dim);margin-left:.25em;letter-spacing:0}
+.sub{display:flex;gap:16px;flex-wrap:wrap;font:500 13px var(--mono);font-variant-numeric:tabular-nums;color:var(--dim);text-shadow:0 1px 8px rgba(0,0,0,.6)}
+.sub b{color:var(--txt);font-weight:500}
+.phase{display:inline-flex;align-items:center;gap:8px;font:600 11px var(--mono);letter-spacing:.16em;padding:6px 10px;border-radius:3px;background:var(--hab-soft);color:var(--hab);border:1px solid rgba(255,107,44,.35)}
+.phase::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor;box-shadow:0 0 10px currentColor}
+
+.right{grid-column:2;grid-row:2;align-self:start;display:grid;gap:10px;max-height:100%;overflow:auto}
+.card{padding:14px;display:grid;gap:10px}
+.nums{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 14px}
+.num .v{font:500 18px/1.2 var(--mono);font-variant-numeric:tabular-nums}
+.num .v small{font-size:11px;color:var(--dim);margin-left:3px}
+.num .s{font-size:11px;color:var(--faint)}
+.sens{display:grid;gap:9px}
+.srow{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;align-items:baseline}
+.srow .n{font:600 12px var(--mono)}
+.srow .val{font:12px var(--mono);font-variant-numeric:tabular-nums;color:var(--txt);text-align:right}
+.srow .why{grid-column:1 / -1;font-size:11.5px;color:var(--dim);line-height:1.4}
+.pill{display:inline-block;font:500 10px var(--mono);letter-spacing:.06em;padding:2px 6px;border-radius:3px;margin-left:6px;vertical-align:1px}
+.pill.ok{color:var(--ok);background:rgba(91,211,154,.12)}
+.pill.warn{color:var(--warn);background:rgba(245,185,66,.14)}
+.pill.bad{color:var(--bad);background:rgba(255,111,111,.14)}
+.part h3{margin:0;font:600 16px/1.3 var(--body)}
+.part .tag{font:500 10px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--hab)}
+.part p{margin:0;font-size:13px;color:var(--txt)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:3px 10px;font-size:12px;margin:0}
+.kv dt{color:var(--dim);font-family:var(--mono);font-size:11px}
+.kv dd{margin:0}
+.hint{font-size:11px;color:var(--faint)}
+
+.bottom{grid-column:1 / -1;display:grid;gap:10px;padding:12px 14px}
+.tl-row{display:flex;align-items:center;gap:12px}
+#play{min-width:92px}
+.track{position:relative;flex:1;height:34px}
+.track input{position:absolute;inset:auto 0 0 0;width:100%;margin:0;accent-color:var(--hab);height:18px}
+.marks{position:absolute;inset:0 0 18px 0}
+.mark{position:absolute;top:0;transform:translateX(-50%);font:500 10px var(--mono);letter-spacing:.06em;color:var(--dim);background:none;border:0;padding:0 2px;backdrop-filter:none;-webkit-backdrop-filter:none;white-space:nowrap}
+.mark::after{content:"";position:absolute;left:50%;top:14px;width:1px;height:8px;background:var(--faint)}
+.mark:hover{color:var(--txt)}
+.clock{font:500 12px var(--mono);font-variant-numeric:tabular-nums;color:var(--dim);white-space:nowrap}
+.opts{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center}
+.seg{display:flex;gap:4px;align-items:center}
+.seg .lbl{margin-right:4px}
+.frm{font:11px/1.4 var(--mono);color:#9FE8B8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.9}
+
+/* about drawer */
+.about{position:fixed;top:0;right:0;bottom:0;width:min(440px,100%);background:var(--glass-hi);border-left:1px solid var(--edge);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  padding:calc(22px + env(safe-area-inset-top,0px)) 22px calc(22px + env(safe-area-inset-bottom,0px));overflow:auto;display:grid;gap:16px;align-content:start;z-index:5}
+.about h2{margin:0;font:600 18px/1.2 var(--display)}
+.about h3{margin:0;font:600 13px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--hab)}
+.about ul{margin:0;padding-left:18px;display:grid;gap:7px;font-size:13px;color:var(--txt)}
+.about code{font:12px var(--mono);color:#FFD2BD}
+.about .close{justify-self:end}
+
+/* splash */
+.splash{position:fixed;inset:0;display:grid;place-items:center;background:radial-gradient(ellipse at center,#0E1522 0%,#04060B 70%);z-index:10;transition:opacity .8s}
+.splash.gone{opacity:0;pointer-events:none}
+.splash div{display:grid;gap:14px;justify-items:center;text-align:center}
+.splash h1{margin:0;font:700 34px var(--display)}
+.splash h1 b{color:var(--hab)}
+.splash p{margin:0;font:12px var(--mono);color:var(--dim);letter-spacing:.08em}
+.bar{width:180px;height:2px;background:rgba(255,255,255,.1);overflow:hidden;border-radius:2px}
+.bar i{display:block;height:100%;width:30%;background:var(--hab);animation:load 1.2s ease-in-out infinite}
+@keyframes load{0%{transform:translateX(-100%)}100%{transform:translateX(340%)}}
+
+.sens-toggle{display:none}
+@media (max-width:820px){
+  .hud{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr) auto auto;padding-inline:16px;gap:10px}
+  .brand h1{font-size:20px}.brand p{display:none}
+  .right{grid-column:1;grid-row:2;align-self:start;max-height:46vh}
+  .right.collapsed .card:not(:first-child){display:none}
+  .left{grid-column:1;grid-row:3}
+  .sens-toggle{display:inline-block}
+  .opts{gap:8px}
+  .mark{font-size:9px}
+}
+@media (prefers-reduced-motion: reduce){.bar i{animation:none}.splash{transition:none}}
+</style>
+</head>
+<body>
+<canvas id="scene" aria-label="3D-сцена: зонд HAB-1 в стратосфере"></canvas>
+
+<div class="splash" id="splash"><div>
+  <h1>HAB-<b>1</b></h1>
+  <div class="bar"><i></i></div>
+  <p id="splash-msg">надуваем шар…</p>
+</div></div>
+
+<div class="hud">
+  <div class="top">
+    <div class="brand">
+      <h1>HAB-<b>1</b></h1>
+      <p>Самодельный бортовой компьютер для стратосферного шара. Полёт посчитан по модели атмосферы, плата внутри зонда взята из KiCad-проекта.</p>
+    </div>
+    <div class="views" role="group" aria-label="Камера">
+      <button id="v-probe" aria-pressed="true">Зонд</button>
+      <button id="v-train" aria-pressed="false">Весь подвес</button>
+      <button id="v-inside" aria-pressed="false">Внутри</button>
+      <button id="about-btn">О модели</button>
+    </div>
+  </div>
+
+  <aside class="right" id="right">
+    <div class="glass card">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <span class="lbl">Датчики на борту</span>
+        <button class="sens-toggle" id="sens-toggle" aria-expanded="false">Показать</button>
+      </div>
+      <div class="sens" id="sens"></div>
+    </div>
+    <div class="glass card">
+      <span class="lbl">Среда и шар</span>
+      <div class="nums" id="nums"></div>
+    </div>
+    <div class="glass card part" id="part" hidden></div>
+  </aside>
+
+  <div class="left">
+    <span class="phase" id="phase">ПОДЪЁМ</span>
+    <div class="alt" id="alt">0<small>км</small></div>
+    <div class="sub" id="sub"></div>
+  </div>
+
+  <div class="glass bottom">
+    <div class="tl-row">
+      <button id="play" aria-pressed="false">▶ Полёт</button>
+      <div class="track">
+        <div class="marks" id="marks"></div>
+        <input type="range" id="t" min="0" max="1000" step="any" aria-label="Время полёта">
+      </div>
+      <span class="clock" id="clock"></span>
+    </div>
+    <div class="opts">
+      <div class="seg" role="group" aria-label="Атмосфера"><span class="lbl">Атмосфера</span>
+        <button id="atm-trop" aria-pressed="true">Тропики</button><button id="atm-isa" aria-pressed="false">Стандартная ISA</button></div>
+      <div class="seg" role="group" aria-label="Режим GPS"><span class="lbl">GPS</span>
+        <button id="gps-air" aria-pressed="true">Airborne &lt;4g</button><button id="gps-port" aria-pressed="false">Portable</button></div>
+    </div>
+    <div class="frm" id="frm" title="Строка кадра в формате FramePrint прошивки, значения из модели"></div>
+  </div>
+</div>
+
+<aside class="about" id="about" hidden aria-label="О модели">
+  <button class="close" id="about-close">Закрыть</button>
+  <h2>Что здесь настоящее, а что модель</h2>
+  <h3>Настоящее</h3>
+  <ul>
+    <li>Плата внутри зонда выгружена из KiCad-проекта полётной платы (<code>kicad-cli pcb export glb</code>). Детали расставлены, дорожки ещё не разведены.</li>
+    <li>Высота по давлению считается формулой из прошивки: <code>44330·(1 − (p/p₀)^(1/5,255))</code>. Она верна только до 11 км, и страница показывает, насколько она ошибается выше.</li>
+    <li>Строка внизу экрана в формате <code>FramePrint</code>: те же поля, флаги <code>valid</code> и код режима GPS, что в прошивке <code>hab_bringup</code>.</li>
+    <li>Паспортные пределы: BMP390 работает от 300 до 1250 гПа, DS18B20 от −55 до +125 °C, u-blox M10 в режиме Portable до 12 км, в Airborne &lt;4g до 80 км.</li>
+    <li>Корпус по концепции HW-34: пенопласт XPS 30 мм, 250 × 175 × 140 мм, салазки с платой 1U, батареи 4× L91, отсек камеры.</li>
+  </ul>
+  <h3>Модель</h3>
+  <ul>
+    <li>Два профиля атмосферы. Стандартная ISA и упрощённые тропики: +27 °C у земли, около −83 °C на 17 км. Запуск планируется в тропиках, поэтому по умолчанию включены они.</li>
+    <li>Подъём 5 м/с. Шар 1,9 м у земли и лопается при 7,9 м, газ считается при температуре воздуха. Высота разрыва получается из этого расчёта.</li>
+    <li>Спуск на парашюте: 5 м/с у земли, на высоте быстрее пропорционально √(ρ₀/ρ).</li>
+    <li>Температура внутри бокса — грубая оценка. Её заменят данные теста с сухим льдом (HW-34).</li>
+    <li>Поверхность Земли, облака и показания IMU в момент разрыва условные. Размеры шара, строп и корпуса в масштабе.</li>
+  </ul>
+  <h3>Дальше</h3>
+  <ul>
+    <li>Карта неба GPS, повтор настоящего лога со стенда, радиолиния LoRa, питание на морозе.</li>
+    <li>После запуска модель заменится настоящим полётом из лога.</li>
+  </ul>
+</aside>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+const nf=(x,d=0)=>x.toLocaleString("ru-RU",{minimumFractionDigits:d,maximumFractionDigits:d}).replace("-","−");
+const REDUCED=matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/* =========================== Atmosphere + flight model =========================== */
+const Rg=287.053, G=9.80665, D0=1.9, DBURST=7.9, ASCENT=5, DESC0=5, PRE=600, POST=900;
+const PROFILES={
+  isa:{name:"ISA",T:h=> h<=11000?288.15-0.0065*h : h<=20000?216.65 : h<=32000?216.65+0.001*(h-20000) : 228.65+0.0028*(h-32000)},
+  trop:{name:"тропики",T:h=> h<=17000?300-0.0065*h : h<=30000?189.5+(228-189.5)*(h-17000)/13000 : 228+0.0028*(h-30000)},
+};
+function buildModel(key){
+  const Tf=PROFILES[key].T, dz=10, N=4200, T=new Float64Array(N+1), P=new Float64Array(N+1);
+  P[0]=101325; T[0]=Tf(0);
+  for(let i=1;i<=N;i++){ T[i]=Tf(i*dz); const Tm=Tf((i-.5)*dz); P[i]=P[i-1]*Math.exp(-G*dz/(Rg*Tm)); }
+  const air=h=>{ const x=Math.min(Math.max(h,0),N*dz-1)/dz, k=Math.floor(x), f=x-k;
+    const t=T[k]+(T[k+1]-T[k])*f, p=P[k]*Math.pow(P[k+1]/P[k],f); return {T:t,P:p,rho:p/(Rg*t)}; };
+  const g0=air(0), diam=h=>{const a=air(h);return D0*Math.cbrt((a.T/g0.T)*(g0.P/a.P));};
+  let lo=0,hi=N*dz-1; for(let i=0;i<60;i++){const m=(lo+hi)/2; diam(m)<DBURST?lo=m:hi=m;}
+  const HB=lo, TB=HB/ASCENT, desc=[HB];
+  for(let h=HB;h>0;){ h=Math.max(0,h-DESC0*Math.sqrt(g0.rho/air(h).rho)); desc.push(h); }
+  const TL=TB+desc.length-1;
+  let hTrop=0,Tmin=1e9; for(let h=0;h<25000;h+=50){const t=Tf(h); if(t<Tmin){Tmin=t;hTrop=h;}}
+  return {key,air,diam,g0,HB,TB,TL,TEND:TL+POST,desc,hTrop,
+    state(t){
+      if(t<0) return {h:0,v:0,phase:"PRELAUNCH"};
+      if(t<TB) return {h:t*ASCENT,v:ASCENT,phase:"ASCENT"};
+      if(t<TL){ const i=t-TB,k=Math.floor(i),f=i-k,h=desc[k]+(desc[Math.min(k+1,desc.length-1)]-desc[k])*f;
+        return {h,v:-DESC0*Math.sqrt(g0.rho/air(h).rho),phase:i<40?"BURST":"DESCENT"}; }
+      return {h:0,v:0,phase:"LANDED"};
+    }};
+}
+let M=buildModel("trop");
+let gpsAirborne=true;
+const PHASE_RU={PRELAUNCH:"ПОДГОТОВКА",ASCENT:"ПОДЪЁМ",BURST:"РАЗРЫВ ШАРА",DESCENT:"СПУСК НА ПАРАШЮТЕ",LANDED:"ПОСАДКА"};
+const baroAlt=p=>44330*(1-Math.pow(p/M.g0.P,1/5.255));
+function sensors(t){
+  const s=M.state(t), a=M.air(s.h), Tout=a.T-273.15, Tin=20-0.35*(15-Tout), fix=gpsAirborne||s.h<=12000;
+  const sw=s.phase==="ASCENT"?1:s.phase==="DESCENT"?.6:0;
+  let acc=[.03*sw*Math.sin(t/3.1),.03*sw*Math.cos(t/2.3),1], gyr=[4*sw*Math.sin(t/2.7),4*sw*Math.cos(t/3.3),6*sw*Math.sin(t/5)];
+  if(s.phase==="BURST"){const k=Math.max(0,1-(t-M.TB)/40); acc=[.4*k*Math.sin(t*2),.5*k*Math.cos(t*1.7),1-.8*k]; gyr=[120*k*Math.sin(t),90*k*Math.cos(t*1.3),150*k];}
+  return {s,a,Tout,Tin,fix,acc,gyr,rel:baroAlt(a.P)};
+}
+const fmtT=t=>{const sg=t<0?"−":"+",a=Math.abs(Math.round(t));return `T${sg}${Math.floor(a/3600)}:${String(Math.floor(a%3600/60)).padStart(2,"0")}:${String(a%60).padStart(2,"0")}`;};
+
+/* =========================== Parts (inside view) =========================== */
+const PARTS={
+  U1:{tag:"Мозг",name:"STM32G474RET6",text:"Тот же чип, что на NUCLEO, поэтому прошивка переезжает почти без изменений. 170 МГц от внутреннего генератора. Сторожевой таймер перезагружает плату, если главный цикл завис дольше 2 с.",kv:[["такт","170 МГц (HSI + PLL)"],["watchdog","IWDG, 2 с"]]},
+  GPS:{tag:"Модуль · USART1",name:"GPS u-blox MAX-M10S",text:"Координаты и высота. Прошивка при старте включает режим Airborne <4g: в режиме по умолчанию приёмник замолкает выше 12 км.",kv:[["пины","PC4 → RX GPS, PC5 ← TX GPS"],["режим","DYNMODEL = 8, RAM + BBR"]]},
+  LORA:{tag:"Модуль · SPI2",name:"Радио LoRa E22-400M22S",text:"Телеметрия на землю, 433 МГц. На rev A стоит в гнёздах: модуль ещё не запущен на стенде.",kv:[["пины","PB13–15, NSS PB12"],["антенна","вниз, к наземной станции"]]},
+  IMU:{tag:"Модуль · SPI3",name:"IMU ICM-42688",text:"Раскачка под шаром, рывок при разрыве, раскрытие парашюта. Своя шина SPI3: на общей шине обвязка этой платы портила ответы флешки.",kv:[["CS","PC7"],["WHO_AM_I","0x47"]]},
+  BARO:{tag:"Модуль · I2C1",name:"Барометр BMP390",text:"Давление и температура внутри бокса. Бокс негерметичный, с вентилем, иначе датчик мерил бы давление внутри, а не снаружи.",kv:[["адрес","0x77"],["паспорт","300–1250 гПа"]]},
+  FLASH:{tag:"Модуль · SPI1",name:"Флешка 16 МБ",text:"Чёрный ящик: каждый кадр пишется записью по 128 байт с CRC-16. После сброса прошивка находит конец лога и продолжает с него.",kv:[["лог","с адреса 0x2000"]]},
+  BATT:{tag:"Питание",name:"4× Energizer L91",text:"Литиевые AA: единственная доступная химия, которая работает на морозе. Лежат под платой, чтобы греться от электроники.",kv:[["до","−40 °C"]]},
+  SLED:{tag:"Механика",name:"Салазки PETG",text:"Жёсткая рамка, которая выдвигается из пенопласта целиком. Плата держится на четырёх шпильках M3 через отверстия формата CubeSat 1U.",kv:[["задача","HW-146"]]},
+  CAM:{tag:"Камера",name:"Экшн-камера",text:"Снимает горизонт через окно в стенке. Главные кадры будут на 25–35 км: чёрное небо и изгиб Земли.",kv:[["задача","HW-138"]]},
+  BOX:{tag:"Корпус",name:"Пенопластовый бокс XPS",text:"Стенки 30 мм. Пенопласт не греет, а задерживает остывание, главный приток тепла даёт солнце. Через бокс насквозь проходят трубки для стропы, сам пенопласт нагрузку не несёт.",kv:[["размер","250 × 175 × 140 мм"],["масса","≈ 560–610 г с камерой"]]},
+  PROBE:{tag:"Датчик снаружи",name:"DS18B20 в белом экране",text:"Температура воздуха за бортом. Трубка-экран закрывает щуп от солнца. В тропической стратосфере воздух холоднее паспортных −55 °C датчика.",kv:[["пин","PA10, 1-Wire"]]},
+};
+function showPart(k){
+  const p=PARTS[k], el=$("part"); if(!p){el.hidden=true;return;}
+  el.innerHTML=`<span class="tag">${p.tag}</span><h3>${p.name}</h3><p>${p.text}</p>`+
+    (p.kv.length?`<dl class="kv">${p.kv.map(([a,b])=>`<dt>${a}</dt><dd>${b}</dd>`).join("")}</dl>`:"");
+  el.hidden=false;
+}
+
+/* =========================== Three.js scene =========================== */
+const canvas=$("scene");
+const renderer=new THREE.WebGLRenderer({canvas,antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.outputEncoding=THREE.sRGBEncoding;
+renderer.toneMapping=THREE.ACESFilmicToneMapping; renderer.toneMappingExposure=1.05;
+const scene=new THREE.Scene();
+const camera=new THREE.PerspectiveCamera(55,1,0.02,4000);
+const controls=new THREE.OrbitControls(camera,canvas);
+controls.enableDamping=true; controls.dampingFactor=.07; controls.enablePan=false;
+controls.minDistance=.25; controls.maxDistance=60;
+
+const SUN=new THREE.Vector3(.75,.45,-.5).normalize();
+
+/* ---- sky + planet: one analytic shader on a sphere that follows the camera ---- */
+const skyMat=new THREE.ShaderMaterial({
+  side:THREE.BackSide,depthWrite:false,depthTest:false,
+  uniforms:{uAlt:{value:0},uDip2:{value:0},uSun:{value:SUN},uR:{value:6371000}},
+  vertexShader:`varying vec3 vDir; void main(){ vec4 w=modelMatrix*vec4(position,1.); vDir=w.xyz-cameraPosition; gl_Position=projectionMatrix*viewMatrix*w; }`,
+  fragmentShader:`
+    precision highp float;
+    varying vec3 vDir; uniform float uAlt,uDip2,uR; uniform vec3 uSun;
+    float hash(vec3 p){p=fract(p*.3183099+.1);p*=17.;return fract(p.x*p.y*p.z*(p.x+p.y+p.z));}
+    float noise(vec3 x){vec3 i=floor(x),f=fract(x);f=f*f*(3.-2.*f);
+      return mix(mix(mix(hash(i),hash(i+vec3(1,0,0)),f.x),mix(hash(i+vec3(0,1,0)),hash(i+vec3(1,1,0)),f.x),f.y),
+                 mix(mix(hash(i+vec3(0,0,1)),hash(i+vec3(1,0,1)),f.x),mix(hash(i+vec3(0,1,1)),hash(i+vec3(1,1,1)),f.x),f.y),f.z);}
+    float fbm(vec3 p){float s=0.,a=.5;for(int i=0;i<5;i++){s+=a*noise(p);p=p*2.03+17.1;a*=.5;}return s;}
+    void main(){
+      vec3 d=normalize(vDir);
+      float f=exp(-uAlt/7500.);                          // air above the camera, 1 at sea level
+      float eh=-sqrt(uDip2);                            // sine of the horizon dip
+      vec3 zen=mix(vec3(.004,.007,.018),vec3(.13,.34,.78),pow(f,.6));
+      vec3 hor=mix(vec3(.30,.58,1.),vec3(.70,.83,.97),pow(f,.7));
+      float s=max(dot(d,uSun),0.);
+      vec3 col;
+      if(d.y<eh){
+        // ray hits the planet: exact distance with the dip computed on the CPU
+        float t=(uR+uAlt)*(-d.y-sqrt(max(d.y*d.y-uDip2,0.)));
+        vec3 p=vec3(d.x*t,(uR+uAlt)+d.y*t,d.z*t);
+        vec3 n=normalize(p);
+        float land=fbm(p/140000.);
+        vec3 alb=land>.52? mix(vec3(.10,.20,.08),vec3(.30,.27,.17),smoothstep(.55,.75,land)) : mix(vec3(.02,.08,.18),vec3(.04,.16,.26),land*1.6);
+        alb*=.85+.3*fbm(p/9000.);
+        float cl=smoothstep(.55,.72,fbm(p/22000.+3.))*smoothstep(0.,2500.,uAlt+400.);
+        alb=mix(alb,vec3(.92),cl*.85);
+        vec3 lit=alb*(.18+1.05*max(dot(n,uSun),0.));
+        float L=18000.+uAlt*2.2;
+        float hz=1.-exp(-t/L);
+        col=mix(lit,hor*.92,clamp(hz,0.,1.)*.9);
+      } else {
+        float x=d.y-eh, w=mix(.028,.55,pow(f,.55));
+        col=mix(hor,zen,pow(clamp(x/w,0.,1.),.55));
+        col+=vec3(.25,.55,1.)*exp(-pow(x/(w*.18),2.))*(1.-f)*.55;   // the thin blue line
+      }
+      col+=vec3(1.,.9,.75)*(pow(s,7.)*.30*(.35+f)+pow(s,900.)*6.+pow(s,60.)*.25);
+      gl_FragColor=vec4(pow(col,vec3(1./1.05)),1.);
+    }`
+});
+const sky=new THREE.Mesh(new THREE.SphereGeometry(1500,48,32),skyMat); sky.renderOrder=-10; sky.frustumCulled=false; scene.add(sky);
+
+const hemi=new THREE.HemisphereLight(0x9cc8ff,0x6a7a8a,.7); scene.add(hemi);
+const sun=new THREE.DirectionalLight(0xfff3e2,2.4); sun.position.copy(SUN).multiplyScalar(20); scene.add(sun);
+
+/* ---- payload train (metres, payload box centre = origin) ---- */
+const BOX=[.25,.14,.175];
+const train=new THREE.Group(); scene.add(train);
+const probe=new THREE.Group(); train.add(probe);
+
+function labelTex(){
+  const c=document.createElement("canvas"); c.width=1024; c.height=580; const x=c.getContext("2d");
+  x.fillStyle="#FF6B2C"; x.fillRect(0,0,c.width,c.height);
+  x.fillStyle="#1A0E08"; x.font="700 190px Unbounded, Arial Black, sans-serif"; x.fillText("HAB-1",60,260);
+  x.font="600 44px 'JetBrains Mono', monospace"; x.fillText("SCIENTIFIC BALLOON PAYLOAD",64,360);
+  x.fillText("HARMLESS · PLEASE CALL",64,420);
+  x.fillStyle="rgba(26,14,8,.8)"; x.fillRect(64,470,560,6);
+  const t=new THREE.CanvasTexture(c); t.encoding=THREE.sRGBEncoding; t.anisotropy=8; return t;
+}
+const orange=new THREE.MeshStandardMaterial({color:0xff6b2c,roughness:.92,transparent:true});
+const orangeLabel=new THREE.MeshStandardMaterial({map:labelTex(),roughness:.92,transparent:true});
+const boxMats=[orange,orange,orange,orange,orangeLabel,orangeLabel];
+const boxMesh=new THREE.Mesh(new THREE.BoxGeometry(...BOX),boxMats); boxMesh.userData.part="BOX"; probe.add(boxMesh);
+const boxEdges=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(...BOX)),new THREE.LineBasicMaterial({color:0xff8a55,transparent:true,opacity:0}));
+probe.add(boxEdges);
+// camera window on +x, vent, rope tubes, antenna, temperature probe, remove-before-flight flag
+const dark=new THREE.MeshStandardMaterial({color:0x0b0d10,roughness:.3,metalness:.4});
+const win=new THREE.Mesh(new THREE.CircleGeometry(.018,32),dark); win.position.set(BOX[0]/2+.0005,.013,.018); win.rotation.y=Math.PI/2; probe.add(win);
+const white=new THREE.MeshStandardMaterial({color:0xf2f2ee,roughness:.6});
+for(const sx of [-1,1]){const tube=new THREE.Mesh(new THREE.CylinderGeometry(.005,.005,.012,16),white);tube.position.set(sx*.1,BOX[1]/2+.006,0);probe.add(tube);}
+const ant=new THREE.Mesh(new THREE.CylinderGeometry(.0015,.0015,.17,8),new THREE.MeshStandardMaterial({color:0x222222,roughness:.5}));
+ant.position.set(-.04,-BOX[1]/2-.085,0); probe.add(ant);
+const shield=new THREE.Mesh(new THREE.CylinderGeometry(.007,.007,.09,20),white); shield.rotation.z=Math.PI/2; shield.position.set(-BOX[0]/2-.045,-.02,.04); shield.userData.part="PROBE"; probe.add(shield);
+const flagC=document.createElement("canvas"); flagC.width=128; flagC.height=640; {const x=flagC.getContext("2d"); x.fillStyle="#D7261E"; x.fillRect(0,0,128,640); x.save(); x.translate(88,620); x.rotate(-Math.PI/2); x.fillStyle="#fff"; x.font="700 44px Arial, sans-serif"; x.fillText("REMOVE BEFORE FLIGHT",0,0); x.restore();}
+const flagTex=new THREE.CanvasTexture(flagC); flagTex.encoding=THREE.sRGBEncoding;
+const flag=new THREE.Mesh(new THREE.PlaneGeometry(.025,.13),new THREE.MeshStandardMaterial({map:flagTex,side:THREE.DoubleSide,roughness:.8}));
+flag.position.set(.06,-.1,-BOX[2]/2-.002); probe.add(flag);
+
+/* interior: sled, batteries, board (GLB from KiCad), modules, camera */
+const inside=new THREE.Group(); probe.add(inside);
+const petg=new THREE.MeshStandardMaterial({color:0x8d97a3,roughness:.55});
+const sled=new THREE.Mesh(new THREE.BoxGeometry(.105,.003,.105),petg); sled.position.set(-.04,-.045,0); sled.userData.part="SLED"; inside.add(sled);
+const holder=new THREE.Mesh(new THREE.BoxGeometry(.062,.004,.058),new THREE.MeshStandardMaterial({color:0x17191c,roughness:.7})); holder.position.set(-.04,-.041,0); holder.userData.part="BATT"; inside.add(holder);
+const cellMat=new THREE.MeshStandardMaterial({color:0x9aa1a8,metalness:.8,roughness:.35});
+for(let i=0;i<4;i++){const c=new THREE.Mesh(new THREE.CylinderGeometry(.00725,.00725,.05,24),cellMat);c.rotation.x=Math.PI/2;c.position.set(-.04-.0225+i*.015,-.032,0);c.userData.part="BATT";inside.add(c);}
+const boardGroup=new THREE.Group(); boardGroup.position.set(-.04,-.022,0); inside.add(boardGroup);
+const BW=.09589,BH=.09017;
+for(const [x,z] of [[.004,.004],[BW-.004,.004],[.004,BH-.004],[BW-.004,BH-.004]]){
+  const st=new THREE.Mesh(new THREE.CylinderGeometry(.0025,.0025,.024,12),petg); st.position.set(x-BW/2,-.011,z-BH/2); st.userData.part="SLED"; boardGroup.add(st);}
+const MODS={GPS:[58,4,26,22,0x2c4f86],LORA:[70,18,24,34,0x8a939c],IMU:[4,52,20,22,0x4a3a8c],BARO:[18,66,16,16,0x5b3f9a],FLASH:[4,28,20,18,0x2d6a4a]};
+const modGroups=[];
+for(const [k,[x,y,w,h,col]] of Object.entries(MODS)){
+  const g=new THREE.Group(); g.userData.part=k;
+  const pcb=new THREE.Mesh(new THREE.BoxGeometry(w/1000,.0016,h/1000),new THREE.MeshStandardMaterial({color:col,roughness:.6}));pcb.userData.part=k;g.add(pcb);
+  const cw=(k==="LORA"?w*.7:Math.min(w,h)*.42)/1000, ch=(k==="LORA"?h*.55:Math.min(w,h)*.42)/1000;
+  const chip=new THREE.Mesh(new THREE.BoxGeometry(cw,k==="LORA"?.0022:.0012,ch),new THREE.MeshStandardMaterial({color:k==="LORA"?0xc9ced3:0x1b1d20,metalness:k==="LORA"?.7:.2,roughness:.4}));
+  chip.position.y=.0015; chip.userData.part=k; g.add(chip);
+  g.position.set((x+w/2)/1000-BW/2,.0106,(y+h/2)/1000-BH/2); g.userData.baseY=g.position.y; boardGroup.add(g); modGroups.push(g);
+}
+const cam=new THREE.Group(); cam.position.set(.075,.005,0); inside.add(cam);
+const camBody=new THREE.Mesh(new THREE.BoxGeometry(.034,.05,.071),new THREE.MeshStandardMaterial({color:0x1c1e22,roughness:.5})); camBody.userData.part="CAM"; cam.add(camBody);
+const lens=new THREE.Mesh(new THREE.CylinderGeometry(.011,.011,.01,32),dark); lens.rotation.z=Math.PI/2; lens.position.set(.021,.008,.018); lens.userData.part="CAM"; cam.add(lens);
+inside.visible=false;
+
+/* rigging, parachute, balloon */
+const ropeMat=new THREE.LineBasicMaterial({color:0xdfe6ee,transparent:true,opacity:.75});
+const rope=new THREE.LineSegments(new THREE.BufferGeometry(),ropeMat); rope.frustumCulled=false; train.add(rope);
+const CHUTE_Y=2.4, BAL_BOTTOM=6.2;
+const chute=new THREE.Group(); train.add(chute);
+{ const geo=new THREE.SphereGeometry(.6,24,12,0,Math.PI*2,0,Math.PI/2.1); const cols=[]; const pos=geo.attributes.position;
+  for(let i=0;i<pos.count;i++){ const a=Math.atan2(pos.getZ(i),pos.getX(i)); const seg=Math.floor(((a+Math.PI)/(Math.PI*2))*8); const c=seg%2?new THREE.Color(0xff6b2c):new THREE.Color(0xf4f1ea); cols.push(c.r,c.g,c.b); }
+  geo.setAttribute("color",new THREE.Float32BufferAttribute(cols,3));
+  const canopy=new THREE.Mesh(geo,new THREE.MeshStandardMaterial({vertexColors:true,side:THREE.DoubleSide,roughness:.8})); chute.add(canopy); }
+const balloon=new THREE.Mesh(new THREE.SphereGeometry(1,64,48),new THREE.MeshPhysicalMaterial({color:0xf3efe6,roughness:.35,transmission:.0,transparent:true,opacity:.93,clearcoat:.6,clearcoatRoughness:.3,sheen:.5}));
+balloon.scale.set(1,1.08,1); train.add(balloon);
+const shredGeo=new THREE.PlaneGeometry(.35,.22), shredMat=new THREE.MeshStandardMaterial({color:0xefe9df,side:THREE.DoubleSide,transparent:true,roughness:.6});
+const shreds=[]; for(let i=0;i<46;i++){ const m=new THREE.Mesh(shredGeo,shredMat); const u=Math.random()*2-1,a=Math.random()*Math.PI*2,r=Math.sqrt(1-u*u);
+  m.userData.dir=new THREE.Vector3(r*Math.cos(a),u,r*Math.sin(a)); m.userData.spin=new THREE.Vector3(Math.random()*4,Math.random()*4,Math.random()*4); m.visible=false; train.add(m); shreds.push(m); }
+
+/* board GLB from KiCad (base64 in board.js) */
+const loader=new THREE.GLTFLoader();
+let boardReady=false;
+function loadBoard(){
+  const js=document.createElement("script"); js.src="board.js";
+  js.onload=()=>{ try{ const bin=atob(window.BOARD_GLB_B64),buf=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) buf[i]=bin.charCodeAt(i);
+    loader.parse(buf.buffer,"",g=>{ const b=g.scene; b.position.set(-.1479,0,-.1451); b.traverse(o=>{ if(o.isMesh){ o.material=o.material.clone(); } if(o.name&&/^[A-Z]{1,3}\d+$/.test(o.name)) o.userData.ref=o.name; });
+      boardGroup.add(b); boardReady=true; },()=>{}); }catch(e){} };
+  document.head.appendChild(js);
+}
+loadBoard();
+const REF2PART={J7:"GPS",J9:"LORA",J5:"IMU",J6:"BARO",J4:"FLASH",J8:"PROBE"};
+function partOf(o){ while(o){ if(o.userData.part) return o.userData.part; if(o.userData.ref) return REF2PART[o.userData.ref]||"U1"; o=o.parent; } return null; }
+
+/* =========================== Views =========================== */
+const VIEWS={
+  probe:{pos:new THREE.Vector3(1.05,.55,1.35),target:new THREE.Vector3(0,.05,0)},
+  train:{pos:new THREE.Vector3(9,1.2,15),target:new THREE.Vector3(0,4.6,0)},
+  inside:{pos:new THREE.Vector3(.28,.2,.3),target:new THREE.Vector3(-.01,-.01,0)},
+};
+let view="probe", fly=null, insideAmt=0;
+function setView(v){
+  view=v; ["probe","train","inside"].forEach(k=>$("v-"+k).setAttribute("aria-pressed",k===v));
+  fly={fromP:camera.position.clone(),fromT:controls.target.clone(),toP:VIEWS[v].pos.clone(),toT:VIEWS[v].target.clone(),k:0};
+  if(REDUCED) fly.k=.999;
+  if(v==="inside") showPart("BOX"); else $("part").hidden=true;
+}
+camera.position.copy(VIEWS.probe.pos); controls.target.copy(VIEWS.probe.target);
+$("v-probe").onclick=()=>setView("probe"); $("v-train").onclick=()=>setView("train"); $("v-inside").onclick=()=>setView("inside");
+
+/* picking in the inside view */
+const ray=new THREE.Raycaster(), mp=new THREE.Vector2(); let down=null;
+canvas.addEventListener("pointerdown",e=>{down=[e.clientX,e.clientY];});
+canvas.addEventListener("pointerup",e=>{
+  if(!down||Math.hypot(e.clientX-down[0],e.clientY-down[1])>5){down=null;return;} down=null;
+  mp.set(e.clientX/innerWidth*2-1,-(e.clientY/innerHeight)*2+1); ray.setFromCamera(mp,camera);
+  const hits=ray.intersectObject(probe,true).filter(h=>h.object.visible&&partOf(h.object));
+  let hit=hits[0]; if(view==="inside"){ const inner=hits.find(h=>partOf(h.object)!=="BOX"); if(inner) hit=inner; }
+  if(hit){ const k=partOf(hit.object); if(view!=="inside"&&k==="BOX"){ setView("inside"); } else showPart(k); }
+});
+
+/* =========================== HUD =========================== */
+const tIn=$("t");
+function setRange(keepFrac){ const f=keepFrac!=null?keepFrac:null; tIn.min=-PRE; tIn.max=Math.round(M.TEND); if(f!=null) tIn.value=Math.round(-PRE+f*(M.TEND+PRE)); buildMarks(); }
+function frac(){ return (+tIn.value+PRE)/(M.TEND+PRE); }
+function buildMarks(){
+  const L=[["Старт",0],[`Тропопауза ${nf(M.hTrop/1000,0)} км`,M.hTrop/ASCENT],["Разрыв",M.TB],["Посадка",M.TL]];
+  $("marks").innerHTML=L.map(([n,t])=>`<button class="mark" data-t="${Math.round(t)}" style="left:${((t+PRE)/(M.TEND+PRE)*100).toFixed(2)}%">${n}</button>`).join("");
+  $("marks").querySelectorAll(".mark").forEach(b=>b.onclick=()=>{stop();tIn.value=b.dataset.t;});
+}
+setRange(); tIn.value=Math.round(27000/ASCENT);
+
+const pill=(c,t)=>`<span class="pill ${c}">${t}</span>`;
+let lastHud="";
+function updateHud(t,d){
+  const {s,a}=d;
+  $("phase").textContent=PHASE_RU[s.phase];
+  $("alt").innerHTML=`${nf(s.h/1000,2)}<small>км</small>`;
+  $("sub").innerHTML=`<span><b>${fmtT(t)}</b></span><span>${s.v>=0?"↑":"↓"} <b>${nf(Math.abs(s.v),1)}</b> м/с</span><span>разрыв на <b>${nf(M.HB/1000,1)}</b> км</span>`;
+  $("clock").textContent=`посадка ${fmtT(M.TL)}`;
+  const D=(s.phase==="ASCENT"||s.phase==="PRELAUNCH")?M.diam(s.h):null;
+  $("nums").innerHTML=[
+    ["Давление",nf(a.P/100,a.P<10000?1:0),"гПа",`${nf(a.P/M.g0.P*100,1)} % от земли`],
+    ["Воздух",nf(d.Tout,1),"°C",PROFILES[M.key].name],
+    ["Внутри бокса",nf(d.Tin,0),"°C","оценка до теста"],
+    ["Шар",D?nf(D,1):"—",D?"м":"",D?`лопнет на ${nf(DBURST,1)} м`:(s.phase==="LANDED"?"на земле":"лопнул")],
+  ].map(([k,v,u,sub])=>`<div class="num"><span class="lbl">${k}</span><div class="v">${v}<small>${u}</small></div><div class="s">${sub}</div></div>`).join("");
+  const baroOk=a.P>=30000, err=d.rel-s.h, dsOk=d.Tout>=-55;
+  const rows=[
+    ["BMP390",`${nf(a.P/100,1)} гПа`,baroOk?pill("ok","НОРМА"):pill("warn","ВНЕ ПАСПОРТА"),
+      Math.abs(err)>150?`Формула прошивки даёт ${nf(d.rel/1000,2)} км, ошибка ${nf(err/1000,2)} км: выше 11 км она неверна.`:""],
+    ["DS18B20",`${nf(d.Tout,1)} °C`,dsOk?pill("ok","НОРМА"):pill("bad","НИЖЕ −55 °C"),dsOk?"":"Воздух холоднее паспортного минимума датчика."],
+    ["GPS M10",d.fix?`фикс, ${nf(s.h,0)} м`:"нет фикса",d.fix?pill("ok",gpsAirborne?"AIRBORNE":"PORTABLE"):pill("bad","ПОТЕРЯН"),d.fix?"":"В режиме Portable приёмник не даёт координаты выше 12 км."],
+    ["ICM-42688",`${d.acc.map(x=>nf(x,2)).join(" / ")} g`,s.phase==="BURST"?pill("warn","РЫВОК"):pill("ok","НОРМА"),s.phase==="BURST"?"Невесомость и кувырок до раскрытия парашюта (условно).":""],
+  ];
+  $("sens").innerHTML=rows.map(([n,v,st,w])=>`<div class="srow"><span class="n">${n}${st}</span><span class="val">${v}</span>${w?`<span class="why">${w}</span>`:""}</div>`).join("");
+  const seq=Math.max(0,Math.floor((t+PRE)/.2)), f2=x=>x.toFixed(2), f1=x=>x.toFixed(1);
+  const valid=0x17|(d.fix?0x08:0);
+  $("frm").textContent=`FRM seq=${seq} t=${Math.max(0,Math.round((t+PRE)*1000))} | BARO p=${f2(a.P)} T=${f2(d.Tin)} rel=${f2(d.rel)} | IMU a=${d.acc.map(f2).join(",")} g=${d.gyr.map(f1).join(",")} | GPS fix=${d.fix?1:0} sats=${d.fix?11:0} view=${d.fix?18:14} alt=${f1(d.fix?s.h:0)} | OUT T=${f2(d.Tout)} | valid=0x${valid.toString(16).toUpperCase().padStart(2,"0")} model@boot=${gpsAirborne?8:0}`;
+}
+
+/* controls */
+let playing=false;
+const playBtn=$("play");
+function stop(){playing=false;playBtn.setAttribute("aria-pressed","false");playBtn.textContent="▶ Полёт";}
+playBtn.onclick=()=>{ if(playing){stop();return;} if(+tIn.value>=M.TEND-1) tIn.value=-PRE; playing=true; playBtn.setAttribute("aria-pressed","true"); playBtn.textContent="❚❚ Пауза"; };
+tIn.addEventListener("input",stop);
+function setAtm(k){ const f=frac(); M=buildModel(k); $("atm-trop").setAttribute("aria-pressed",k==="trop"); $("atm-isa").setAttribute("aria-pressed",k==="isa"); setRange(f); }
+$("atm-trop").onclick=()=>setAtm("trop"); $("atm-isa").onclick=()=>setAtm("isa");
+function setGps(a){gpsAirborne=a;$("gps-air").setAttribute("aria-pressed",a);$("gps-port").setAttribute("aria-pressed",!a);}
+$("gps-air").onclick=()=>setGps(true); $("gps-port").onclick=()=>setGps(false);
+$("about-btn").onclick=()=>{$("about").hidden=false;}; $("about-close").onclick=()=>{$("about").hidden=true;};
+$("sens-toggle").onclick=e=>{const r=$("right"),open=r.classList.toggle("collapsed");e.target.textContent=open?"Показать":"Скрыть";e.target.setAttribute("aria-expanded",!open);};
+if(innerWidth<=820) $("right").classList.add("collapsed");
+addEventListener("keydown",e=>{ if(e.target.tagName==="INPUT"&&e.key!==" ") return;
+  if(e.key===" "){e.preventDefault();playBtn.click();} if(e.key==="Escape") $("about").hidden=true; });
+
+/* =========================== Frame loop =========================== */
+function resize(){ renderer.setSize(innerWidth,innerHeight,false); camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); }
+addEventListener("resize",resize); resize();
+const clock=new THREE.Clock(); let wall=0;
+const tmpV=new THREE.Vector3();
+function frame(){
+  const dt=Math.min(clock.getDelta(),.1); wall+=dt;
+  if(playing){ let t=+tIn.value; const nearBurst=t>M.TB-10&&t<M.TB+45; t+=dt*(nearBurst?4:90); if(t>=M.TEND){t=M.TEND;stop();} tIn.value=t; }
+  const t=+tIn.value, d=sensors(t), s=d.s;
+
+  // camera fly-to
+  if(fly){ fly.k=Math.min(1,fly.k+dt*1.2); const e=1-Math.pow(1-fly.k,3);
+    camera.position.lerpVectors(fly.fromP,fly.toP,e); controls.target.lerpVectors(fly.fromT,fly.toT,e); if(fly.k>=1) fly=null; }
+  const ground=s.phase==="PRELAUNCH"||s.phase==="LANDED";
+  controls.maxPolarAngle=ground?Math.PI*.49:Math.PI;
+  controls.update();
+
+  // train geometry
+  const D=(s.phase==="ASCENT"||s.phase==="PRELAUNCH")?M.diam(s.h):0;
+  const sinceBurst=t-M.TB, open=s.phase==="DESCENT"?1:s.phase==="BURST"?Math.min(1,Math.max(0,(sinceBurst-4)/14)):0;
+  balloon.visible=D>0; if(D){ balloon.scale.set(D/2,D/2*1.08,D/2); balloon.position.set(0,BAL_BOTTOM+D/2*1.08,0); }
+  shreds.forEach(m=>{ const k=sinceBurst; m.visible=k>=0&&k<38&&s.phase!=="LANDED";
+    if(m.visible){ const r=DBURST/2*(1+2.2*(1-Math.exp(-k*.9))); m.position.copy(m.userData.dir).multiplyScalar(r).add(tmpV.set(0,BAL_BOTTOM+DBURST/2+k*1.6,0));
+      m.rotation.set(m.userData.spin.x*k,m.userData.spin.y*k,m.userData.spin.z*k); m.material.opacity=Math.max(0,1-k/38);} });
+  const landed=s.phase==="LANDED";
+  chute.visible=true;
+  if(landed){ chute.position.set(1.3,-BOX[1]/2+.02,.4); chute.scale.set(1.1,.05,1.1); chute.rotation.set(0,0,0); }
+  else { const o=.25+.75*open; chute.position.set(0,CHUTE_Y,0); chute.scale.set(o,.35+.65*open+(1-open)*1.4,o); chute.rotation.set(0,0,0); }
+  // swing
+  const swingAmp=ground?0:(s.phase==="BURST"?.35*Math.max(0,1-sinceBurst/40)+.06:.05);
+  probe.rotation.set(swingAmp*Math.sin(wall*1.3)*.6,wall*.05*(ground?0:1),swingAmp*Math.sin(wall*.9));
+  if(landed){ probe.rotation.set(0,.4,.12); }
+  probe.position.y=landed?-BOX[1]/2*.1:0;
+  // ropes
+  const top=BOX[1]/2+.01, pts=[];
+  if(!landed){ const cy=CHUTE_Y-.02, rim=.6*(.25+.75*open)*.95;
+    for(const sx of [-1,1]) pts.push(sx*.1,top,0, 0,.55,0);
+    pts.push(0,.55,0, 0,cy-.9,0);
+    for(let i=0;i<8;i++){const a=i/8*Math.PI*2; pts.push(0,cy-.9,0, Math.cos(a)*rim,cy,Math.sin(a)*rim);}
+    if(D) pts.push(0,cy+.6*(.35+.65*open+(1-open)*1.4)*.95,0, 0,BAL_BOTTOM,0);
+  }
+  rope.geometry.setAttribute("position",new THREE.Float32BufferAttribute(pts,3));
+
+  // inside x-ray
+  insideAmt+=((view==="inside"?1:0)-insideAmt)*Math.min(1,dt*5);
+  inside.visible=insideAmt>.02;
+  orange.opacity=orangeLabel.opacity=1-insideAmt*.86; orange.depthWrite=orangeLabel.depthWrite=insideAmt<.5;
+  boxEdges.material.opacity=insideAmt*.9;
+  modGroups.forEach(g=>g.position.y=g.userData.baseY+insideAmt*.018);
+  flag.visible=s.phase==="PRELAUNCH";
+
+  // sky + light
+  const camAlt=Math.max(1,s.h+(ground?1.2:0)+camera.position.y);
+  const R=6371000, k=R/(R+camAlt);
+  skyMat.uniforms.uAlt.value=camAlt; skyMat.uniforms.uDip2.value=(1-k)*(1+k);
+  sky.position.copy(camera.position);
+  const f=Math.exp(-camAlt/7500);
+  hemi.color.setRGB(.25+.45*f,.35+.45*f,.55+.4*f); hemi.intensity=.35+.45*f;
+  hemi.groundColor.setRGB(.35,.42,.5);
+
+  const key=`${Math.round(t)}|${gpsAirborne}|${M.key}`;
+  if(key!==lastHud){ updateHud(t,d); lastHud=key; }
+  renderer.render(scene,camera);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+setTimeout(()=>{$("splash").classList.add("gone");},900);
+if(document.fonts) document.fonts.ready.then(()=>{orangeLabel.map=labelTex();orangeLabel.needsUpdate=true;});
+</script>
+
+</body>
+</html>
