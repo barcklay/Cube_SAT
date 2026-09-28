@@ -64,6 +64,8 @@ PLACE = {
     "J4": (8.0, 32.0, 0),      # SPI flash
     "J8": (14.0, 85.0, 90),    # DS18B20 probe connector at the edge (probe goes outside)
     "J10": (74.0, 86.0, 90),   # OLED (bench only)
+    # recovery buzzer: cable connector at the bottom edge, FET and parts next to it
+    "J11": (30.0, 86.0, 90), "Q2": (37.0, 81.0, 0), "R12": (37.0, 77.0, 0), "D3": (41.0, 84.0, 90),
     # test points along the bottom-right
     "TP1": (70.0, 60.0, 0), "TP2": (74.0, 60.0, 0), "TP3": (78.0, 60.0, 0),
     "TP4": (70.0, 64.0, 0), "TP5": (74.0, 64.0, 0), "TP6": (78.0, 64.0, 0),

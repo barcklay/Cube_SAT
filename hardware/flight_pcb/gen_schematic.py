@@ -38,6 +38,7 @@ MCU_NETS = {
     "PB2": "IMU_INT1",
     "PC4": "USART1_TX", "PC5": "USART1_RX",           # GPS
     "PA8": "GPS_PPS",                                  # GPS 1 pulse per second (TIM1_CH1)
+    "PB4": "BUZZER",                                   # recovery buzzer (TIM3_CH1 if a passive one)
     "PA10": "DS18B20_DQ",
     "PB13": "SPI2_SCK", "PB14": "SPI2_MISO", "PB15": "SPI2_MOSI", "PB12": "LORA_NSS",
     "PC6": "LORA_BUSY", "PC8": "LORA_DIO1", "PC9": "LORA_NRST",
@@ -129,6 +130,16 @@ part("D1", "Device:LED", "ALIVE green", "LED_SMD:LED_0603_1608Metric",
 r("R11", "1k", "LED_FIX", "LED2_A", "leds")
 part("D2", "Device:LED", "GPS FIX blue", "LED_SMD:LED_0603_1608Metric",
      {"1": "GND", "2": "LED2_A"}, "leds")
+
+# Recovery buzzer: an active piezo buzzer (3-24 V) on a 2-pin cable to the box wall,
+# switched on the low side from the battery rail so it is loud; beeps only after LANDED.
+part("Q2", "Transistor_FET:AO3400A", "AO3400A", "Package_TO_SOT_SMD:SOT-23",
+     {"1": "BUZZER", "2": "GND", "3": "BUZ_N"}, "buzzer")
+r("R12", "100k", "BUZZER", "GND", "buzzer")  # keeps it silent during reset / boot
+part("D3", "Device:D", "1N4148W", "Diode_SMD:D_SOD-123",
+     {"1": "VBAT_PROT", "2": "BUZ_N"}, "buzzer", "only needed if a magnetic buzzer is used")
+part("J11", "Connector_Generic:Conn_01x02", "BUZZER (+ / -)", XH.format(n=2),
+     {"1": "VBAT_PROT", "2": "BUZ_N"}, "buzzer", "pin 1 = buzzer +, pin 2 = buzzer -")
 
 # Module headers (female sockets on the board)
 part("J4", "Connector_Generic:Conn_01x06", "SPI FLASH module", SOCK.format(n=6),
@@ -465,7 +476,8 @@ for num, (x, y, ang, name, typ) in sorted(mcu.items()):
 BLOCK_TITLE = {"power": "POWER  battery -> switch -> reverse-polarity FET -> 3.3 V LDO",
                "mcu": "MCU SUPPORT  decoupling, VDDA filter, reset, STDC14",
                "pullups": "PULL-UPS (learned on the bench)",
-               "leds": "LEDS", "modules": "MODULE HEADERS (breakouts plug in)",
+               "leds": "LEDS", "buzzer": "RECOVERY BUZZER  battery rail, low-side FET",
+               "modules": "MODULE HEADERS (breakouts plug in)",
                "test": "TEST POINTS", "mech": "MOUNTING HOLES"}
 COL_X0, COL_W, Y_TOP, Y_BOTTOM = 240.0, 80.0, 55.0, 560.0
 cx, cy = COL_X0, Y_TOP

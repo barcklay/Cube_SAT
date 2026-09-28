@@ -57,6 +57,7 @@ Linear: HW-24 (mounting the stack / own PCB), phase 3 HW-20.
 | PA0 | VBAT_SENSE | battery divider | **NEW**, ADC; divider e.g. 100 k / 47 k + 100 nF |
 | PB0 | LED_ALIVE | LED + 1 kΩ | **NEW**, heartbeat |
 | PB1 | LED_FIX | LED + 1 kΩ | **NEW**, GPS fix |
+| PB4 | BUZZER | AO3400A low-side FET → 2-pin JST to the buzzer on the box wall | **NEW**, recovery beeper from the battery rail, only after LANDED; TIM3_CH1 if a passive buzzer is used |
 
 The NEW pins are proposals: check in CubeMX that each one offers the needed function
 before the schematic is final, then add them to `hab_bringup.ioc` so the flight board
