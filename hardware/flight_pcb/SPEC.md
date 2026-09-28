@@ -46,6 +46,7 @@ Linear: HW-24 (mounting the stack / own PCB), phase 3 HW-20.
 | PC10 / PC11 / PC12 | SPI3 SCK / MISO / MOSI | IMU SCLK / SDO / SDI | IMU **alone** on SPI3 (it corrupted the flash on a shared bus) |
 | PC7 | IMU_CS | IMU CS | 10 kΩ pull-up (idle high) |
 | PC4 / PC5 | USART1 TX / RX | GPS RX / TX | GPS runs at 38400 baud (auto-detected) |
+| PA8 | GPS_PPS | GPS PPS | **NEW**, 1 pulse per second, TIM1_CH1 input capture for precise time |
 | PA10 | DS18B20 (open drain) | probe data | 4.7 kΩ pull-up to 3V3 |
 | PB13 / PB14 / PB15 | SPI2 SCK / MISO / MOSI | E22 SCK / MISO / MOSI | **NEW**, LoRa on its own bus |
 | PB12 | LORA_NSS | E22 NSS | **NEW**, 10 kΩ pull-up |

@@ -37,6 +37,7 @@ MCU_NETS = {
     "PC10": "SPI3_SCK", "PC11": "SPI3_MISO", "PC12": "SPI3_MOSI", "PC7": "IMU_CS",
     "PB2": "IMU_INT1",
     "PC4": "USART1_TX", "PC5": "USART1_RX",           # GPS
+    "PA8": "GPS_PPS",                                  # GPS 1 pulse per second (TIM1_CH1)
     "PA10": "DS18B20_DQ",
     "PB13": "SPI2_SCK", "PB14": "SPI2_MISO", "PB15": "SPI2_MOSI", "PB12": "LORA_NSS",
     "PC6": "LORA_BUSY", "PC8": "LORA_DIO1", "PC9": "LORA_NRST",
@@ -137,12 +138,14 @@ part("J5", "Connector_Generic:Conn_01x08", "IMU GY-601N1", SOCK.format(n=8),
      {"1": "+3V3", "2": "GND", "3": "SPI3_SCK", "4": "SPI3_MOSI", "5": "SPI3_MISO",
       "6": "IMU_CS", "7": "IMU_INT1", "8": None}, "modules",
      "order VCC GND SCLK SDI SDO CS INT1 INT2 as on the GY-601N1 silkscreen")
-part("J6", "Connector_Generic:Conn_01x06", "BAROMETER BMP390", SOCK.format(n=6),
-     {"1": "+3V3", "2": "GND", "3": "I2C_SCL", "4": "I2C_SDA", "5": "+3V3", "6": "+3V3"},
-     "modules", "CONFIRM order: VCC GND SCK SDI SDO(=high, addr 0x77) CSB(=high, I2C)")
-part("J7", "Connector_Generic:Conn_01x04", "GPS MAX-M10S", SOCK.format(n=4),
-     {"1": "+3V3", "2": "GND", "3": "USART1_RX", "4": "USART1_TX"}, "modules",
-     "CONFIRM order: VCC GND TX(module) RX(module)")
+part("J6", "Connector_Generic:Conn_01x07", "BAROMETER BMP390", SOCK.format(n=7),
+     {"1": None, "2": "+3V3", "3": "+3V3", "4": "I2C_SDA", "5": "I2C_SCL", "6": "+3V3",
+      "7": "GND"}, "modules",
+     "order INT CS SDO SDI SCK VCC GND as on the module (checked 2026-09-29); "
+     "CS high = I2C, SDO high = addr 0x77")
+part("J7", "Connector_Generic:Conn_01x05", "GPS MAX-M10S", SOCK.format(n=5),
+     {"1": "+3V3", "2": "GND", "3": "USART1_RX", "4": "USART1_TX", "5": "GPS_PPS"}, "modules",
+     "order VCC GND TX RX PPS as on the module (checked 2026-09-29); module TX -> MCU RX")
 part("J8", "Connector_Generic:Conn_01x03", "DS18B20 probe", XH.format(n=3),
      {"1": "+3V3", "2": "DS18B20_DQ", "3": "GND"}, "modules", "red / yellow / black")
 part("J9", "Connector_Generic:Conn_01x12", "LoRa E22-400M22S (adapter)", SOCK.format(n=12),
