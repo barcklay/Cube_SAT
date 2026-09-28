@@ -1,0 +1,8 @@
+[out:json][timeout:180];
+area["ISO3166-1"="TH"][admin_level=2]->.th;
+(
+  nwr["aeroway"="aerodrome"](area.th);
+  nwr["landuse"="military"](area.th);
+  nwr["military"~"airfield|base|range|danger_area|barracks|naval_base"](area.th);
+);
+out center tags;

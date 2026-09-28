@@ -141,6 +141,7 @@ button[aria-pressed="true"]{background:var(--txt);color:#0A0E14;border-color:var
     <div class="views" role="group" aria-label="Камера">
       <button id="v-probe" aria-pressed="true">Зонд</button>
       <button id="v-train" aria-pressed="false">Весь подвес</button>
+      <button id="v-top" aria-pressed="false">Сверху</button>
       <button id="v-inside" aria-pressed="false">Внутри</button>
       <button id="about-btn">О модели</button>
     </div>
@@ -157,6 +158,11 @@ button[aria-pressed="true"]{background:var(--txt);color:#0A0E14;border-color:var
     <div class="glass card">
       <span class="lbl">Среда и шар</span>
       <div class="nums" id="nums"></div>
+    </div>
+    <div class="glass card">
+      <span class="lbl">Место</span>
+      <div class="nums" id="site"></div>
+      <div class="hint" id="site-note"></div>
     </div>
     <div class="glass card part" id="part" hidden></div>
   </aside>
@@ -204,6 +210,14 @@ button[aria-pressed="true"]{background:var(--txt);color:#0A0E14;border-color:var
     <li>Спуск на парашюте: 5 м/с у земли, на высоте быстрее пропорционально √(ρ₀/ρ).</li>
     <li>Температура внутри бокса — грубая оценка. Её заменят данные теста с сухим льдом (HW-34).</li>
     <li>Поверхность Земли, облака и показания IMU в момент разрыва условные. Размеры шара, строп и корпуса в масштабе.</li>
+  </ul>
+  <h3>Точка старта</h3>
+  <ul>
+    <li>Кандидаты считались по сетке 0,1° по всему Таиланду (около 11 км между точками). Условия: от аэропортов с кодом IATA/ICAO не ближе 50 км, от других аэродромов 20 км, от военных объектов 25 км, до сухопутной границы и моря не меньше 150 км. Перепад высот по SRTM в квадрате 8×8 км не больше 25 м.</li>
+    <li>Выбрана точка <code>15,800° N 102,500° E</code> (район Вэнг Ной, провинция Кхонкэн, плато Корат). До границы и моря 178 км, до аэропорта 80 км, до военного объекта в OSM 52 км, перепад высот 16 м, высота 186 м.</li>
+    <li>Траектория на сцене — пример прогноза SondeHub/Tawhiri по погоде GFS на один день (дата в панели «Место»). В феврале–марте ветры другие. Настоящий прогноз нужно считать за несколько дней до пуска.</li>
+    <li>Военные объекты в OSM отмечены не полностью. Перед пуском точку надо согласовать с авиавластями Таиланда (CAAT) и подать NOTAM.</li>
+    <li>Снимок поверхности: NASA Blue Marble Next Generation (общественное достояние), через NASA GIBS.</li>
   </ul>
   <h3>Дальше</h3>
   <ul>
@@ -299,11 +313,13 @@ const SUN=new THREE.Vector3(.75,.45,-.5).normalize();
 /* ---- sky + planet: one analytic shader on a sphere that follows the camera ---- */
 const skyMat=new THREE.ShaderMaterial({
   side:THREE.BackSide,depthWrite:false,depthTest:false,
-  uniforms:{uAlt:{value:0},uDip2:{value:0},uSun:{value:SUN},uR:{value:6371000}},
+  uniforms:{uAlt:{value:0},uDip2:{value:0},uSun:{value:SUN},uR:{value:6371000},uLat0:{value:0},uLon0:{value:0},
+    tWide:{value:null},tNear:{value:null},uHasTex:{value:0},uWideB:{value:new THREE.Vector4()},uNearB:{value:new THREE.Vector4()}},
   vertexShader:`varying vec3 vDir; void main(){ vec4 w=modelMatrix*vec4(position,1.); vDir=w.xyz-cameraPosition; gl_Position=projectionMatrix*viewMatrix*w; }`,
   fragmentShader:`
     precision highp float;
-    varying vec3 vDir; uniform float uAlt,uDip2,uR; uniform vec3 uSun;
+    varying vec3 vDir; uniform float uAlt,uDip2,uR,uLat0,uLon0,uHasTex; uniform vec3 uSun; uniform sampler2D tWide,tNear; uniform vec4 uWideB,uNearB;
+    vec4 img(sampler2D t,vec4 b,vec2 ll){ vec2 uv=(ll-b.xy)/(b.zw-b.xy); float m=smoothstep(0.,.03,uv.x)*smoothstep(0.,.03,uv.y)*smoothstep(0.,.03,1.-uv.x)*smoothstep(0.,.03,1.-uv.y); return vec4(texture2D(t,clamp(uv,0.,1.)).rgb,m); }
     float hash(vec3 p){p=fract(p*.3183099+.1);p*=17.;return fract(p.x*p.y*p.z*(p.x+p.y+p.z));}
     float noise(vec3 x){vec3 i=floor(x),f=fract(x);f=f*f*(3.-2.*f);
       return mix(mix(mix(hash(i),hash(i+vec3(1,0,0)),f.x),mix(hash(i+vec3(0,1,0)),hash(i+vec3(1,1,0)),f.x),f.y),
@@ -328,7 +344,18 @@ const skyMat=new THREE.ShaderMaterial({
         float cl=smoothstep(.55,.72,fbm(p/22000.+3.))*smoothstep(0.,2500.,uAlt+400.);
         alb=mix(alb,vec3(.92),cl*.85);
         vec3 lit=alb*(.18+1.05*max(dot(n,uSun),0.));
-        float L=18000.+uAlt*2.2;
+        if(uHasTex>.5){
+          // real imagery (NASA Blue Marble) placed by latitude/longitude of the hit point
+          float sl=sin(uLat0),ca=cos(uLat0),so=sin(uLon0),co=cos(uLon0);
+          vec3 E=vec3(-so,co,0.),N=vec3(-sl*co,-sl*so,ca),U=vec3(ca*co,ca*so,sl);
+          vec3 ec=n.x*E+n.y*U-n.z*N;
+          vec2 ll=vec2(atan(ec.y,ec.x),asin(clamp(ec.z,-1.,1.)));
+          vec4 w=img(tWide,uWideB,ll), q=img(tNear,uNearB,ll);
+          vec3 im=mix(w.rgb,q.rgb,q.a)*(.75+.45*max(dot(n,uSun),0.));
+          im=mix(im,vec3(.92),cl*.45);
+          lit=mix(lit,im,max(w.a,q.a));
+        }
+        float L=30000.+uAlt*4.;
         float hz=1.-exp(-t/L);
         col=mix(lit,hor*.92,clamp(hz,0.,1.)*.9);
       } else {
@@ -438,16 +465,17 @@ const VIEWS={
   probe:{pos:new THREE.Vector3(1.05,.55,1.35),target:new THREE.Vector3(0,.05,0)},
   train:{pos:new THREE.Vector3(9,1.2,15),target:new THREE.Vector3(0,4.6,0)},
   inside:{pos:new THREE.Vector3(.28,.2,.3),target:new THREE.Vector3(-.01,-.01,0)},
+  top:{pos:new THREE.Vector3(.02,2.6,.02),target:new THREE.Vector3(0,0,0)},
 };
 let view="probe", fly=null, insideAmt=0;
 function setView(v){
-  view=v; ["probe","train","inside"].forEach(k=>$("v-"+k).setAttribute("aria-pressed",k===v));
+  view=v; ["probe","train","top","inside"].forEach(k=>$("v-"+k).setAttribute("aria-pressed",k===v));
   fly={fromP:camera.position.clone(),fromT:controls.target.clone(),toP:VIEWS[v].pos.clone(),toT:VIEWS[v].target.clone(),k:0};
   if(REDUCED) fly.k=.999;
   if(v==="inside") showPart("BOX"); else $("part").hidden=true;
 }
 camera.position.copy(VIEWS.probe.pos); controls.target.copy(VIEWS.probe.target);
-$("v-probe").onclick=()=>setView("probe"); $("v-train").onclick=()=>setView("train"); $("v-inside").onclick=()=>setView("inside");
+$("v-probe").onclick=()=>setView("probe"); $("v-train").onclick=()=>setView("train"); $("v-inside").onclick=()=>setView("inside"); $("v-top").onclick=()=>setView("top");
 
 /* picking in the inside view */
 const ray=new THREE.Raycaster(), mp=new THREE.Vector2(); let down=null;
@@ -460,6 +488,40 @@ canvas.addEventListener("pointerup",e=>{
   if(hit){ const k=partOf(hit.object); if(view!=="inside"&&k==="BOX"){ setView("inside"); } else showPart(k); }
 });
 
+
+/* =========================== Launch site + example trajectory =========================== */
+const SITE={name:"Вэнг Ной, Кхонкэн",lat:15.8,lon:102.5};
+const TRACK={"date":"2026-09-29T00:00:00Z","ground":186,"asc":[[15.8,102.5,186],[15.8014,102.5009,486],[15.8029,102.5025,786],[15.8045,102.5048,1086],[15.8063,102.5076,1386],[15.8083,102.5108,1686],[15.8104,102.5142,1986],[15.8125,102.5175,2286],[15.8148,102.5209,2586],[15.8173,102.5244,2886],[15.82,102.5279,3186],[15.8231,102.5315,3486],[15.8265,102.5351,3786],[15.8303,102.5386,4086],[15.8346,102.5419,4386],[15.8395,102.5447,4686],[15.845,102.5471,4986],[15.851,102.549,5286],[15.8573,102.5503,5586],[15.8635,102.5515,5886],[15.8691,102.5529,6186],[15.8739,102.5545,6486],[15.8779,102.5562,6786],[15.8817,102.5575,7086],[15.8855,102.5581,7386],[15.8896,102.5576,7686],[15.8938,102.5566,7986],[15.8982,102.5552,8286],[15.9026,102.5534,8586],[15.9067,102.5512,8886],[15.9104,102.5484,9186],[15.9135,102.5453,9486],[15.9158,102.5418,9786],[15.9173,102.5377,10086],[15.9177,102.5332,10386],[15.9172,102.5286,10686],[15.9158,102.5244,10986],[15.9136,102.5207,11286],[15.9105,102.5178,11586],[15.9065,102.5158,11886],[15.9021,102.5132,12186],[15.8972,102.5101,12486],[15.892,102.5064,12786],[15.8866,102.5022,13086],[15.8808,102.4976,13386],[15.8762,102.4923,13686],[15.8737,102.4862,13986],[15.8733,102.4793,14286],[15.8746,102.4714,14586],[15.8769,102.4621,14886],[15.8803,102.4514,15186],[15.8847,102.4393,15486],[15.889,102.4268,15786],[15.8929,102.4143,16086],[15.8962,102.4019,16386],[15.8991,102.3894,16686],[15.9015,102.3773,16986],[15.9035,102.3658,17286],[15.9051,102.3548,17586],[15.9063,102.3444,17886],[15.9071,102.3345,18186],[15.9075,102.3251,18486],[15.9075,102.3163,18786],[15.9077,102.308,19086],[15.9082,102.3002,19386],[15.9091,102.293,19686],[15.9103,102.2863,19986],[15.9119,102.2802,20286],[15.9139,102.2746,20586],[15.9162,102.2696,20886],[15.9183,102.2646,21186],[15.9201,102.2597,21486],[15.9215,102.2549,21786],[15.9226,102.25,22086],[15.9234,102.2453,22386],[15.924,102.2405,22686],[15.9242,102.2358,22986],[15.9241,102.231,23286],[15.9237,102.2263,23586],[15.9231,102.2216,23886],[15.9223,102.2169,24186],[15.9215,102.2123,24486],[15.9208,102.2078,24786],[15.9202,102.2033,25086],[15.9197,102.1989,25386],[15.9192,102.1945,25686],[15.9188,102.1903,25986],[15.9185,102.1861,26286],[15.9182,102.182,26586],[15.918,102.1776,26886],[15.9178,102.1728,27186],[15.9178,102.1676,27486],[15.9178,102.1619,27786],[15.9179,102.1557,28086],[15.9181,102.149,28386],[15.9183,102.1419,28686],[15.9187,102.1343,28986],[15.9191,102.1263,29286],[15.9196,102.1178,29586],[15.9202,102.1088,29886],[15.9204,102.1052,30001]],"desc":[[15.9204,102.1052,30001],[15.9208,102.0977,27718],[15.9204,102.0933,25797],[15.9199,102.0887,24153],[15.9198,102.0839,22700],[15.9207,102.0792,21396],[15.9225,102.0745,20213],[15.9233,102.0675,19131],[15.9235,102.0583,18133],[15.9247,102.0477,17208],[15.9271,102.0358,16346],[15.9312,102.0233,15538],[15.9354,102.0119,14779],[15.9366,102.004,14062],[15.9336,101.9982,13383],[15.9285,101.9941,12739],[15.9238,101.9917,12126],[15.9196,101.99,11541],[15.9172,101.9867,10981],[15.917,101.9822,10443],[15.9184,101.9779,9922],[15.9208,101.9744,9418],[15.9245,101.9719,8928],[15.929,101.9703,8452],[15.9335,101.9696,7990],[15.9379,101.9696,7539],[15.9425,101.9702,7100],[15.9472,101.9711,6672],[15.9524,101.972,6254],[15.9584,101.973,5845],[15.9649,101.9746,5446],[15.9709,101.9769,5055],[15.9763,101.9796,4672],[15.9809,101.9827,4297],[15.985,101.9858,3929],[15.9888,101.9888,3568],[15.9922,101.9915,3213],[15.9953,101.9943,2866],[15.9982,101.9974,2524],[16.0011,102.0006,2188],[16.0037,102.0039,1857],[16.0062,102.0071,1532],[16.0083,102.0101,1212],[16.0095,102.0123,898],[16.0102,102.0139,587],[16.0102,102.014,571]]};
+const D2R=Math.PI/180;
+const WIDE_B=[98.5,11.8,106.5,19.8], NEAR_B=[101.9,15.2,103.1,16.4];
+function lerpTrack(tr,alt,rising){ // position at altitude alt along a monotonic leg
+  if(rising){ if(alt<=tr[0][2]) return tr[0]; for(let i=1;i<tr.length;i++) if(tr[i][2]>=alt){const a=tr[i-1],b=tr[i],f=(alt-a[2])/(b[2]-a[2]||1);return [a[0]+(b[0]-a[0])*f,a[1]+(b[1]-a[1])*f];} return tr[tr.length-1]; }
+  if(alt>=tr[0][2]) return tr[0]; for(let i=1;i<tr.length;i++) if(tr[i][2]<=alt){const a=tr[i-1],b=tr[i],f=(a[2]-alt)/(a[2]-b[2]||1);return [a[0]+(b[0]-a[0])*f,a[1]+(b[1]-a[1])*f];} return tr[tr.length-1];
+}
+function posAt(s){
+  if(s.phase==="PRELAUNCH") return [SITE.lat,SITE.lon];
+  if(s.phase==="LANDED") return TRACK.desc[TRACK.desc.length-1];
+  const alt=s.h+TRACK.ground;
+  return s.phase==="ASCENT"?lerpTrack(TRACK.asc,alt,true):lerpTrack(TRACK.desc,alt,false);
+}
+function kmBetween(a,b){const R=6371,dl=(b[0]-a[0])*D2R,dn=(b[1]-a[1])*D2R,x=Math.sin(dl/2)**2+Math.cos(a[0]*D2R)*Math.cos(b[0]*D2R)*Math.sin(dn/2)**2;return 2*R*Math.asin(Math.sqrt(x));}
+function overlayTexture(url,B,size,lw,mark){
+  return new Promise(res=>{ const im=new Image(); im.onload=()=>{
+    const c=document.createElement("canvas"); c.width=c.height=size; const x=c.getContext("2d"); x.drawImage(im,0,0,size,size);
+    const P=([la,lo])=>[(lo-B[0])/(B[2]-B[0])*size,(B[3]-la)/(B[3]-B[1])*size];
+    const line=(tr,col,dash)=>{x.strokeStyle=col;x.lineWidth=lw;x.setLineDash(dash);x.beginPath();tr.forEach((p,i)=>{const [u,v]=P(p);i?x.lineTo(u,v):x.moveTo(u,v);});x.stroke();x.setLineDash([]);};
+    line(TRACK.asc,"#FF6B2C",[]); line(TRACK.desc,"#F4F1EA",[lw*3,lw*2]);
+    const [lu,lv]=P([SITE.lat,SITE.lon]); x.fillStyle="#FF6B2C"; x.beginPath(); x.arc(lu,lv,mark,0,7); x.fill(); x.strokeStyle="#fff"; x.lineWidth=lw; x.beginPath(); x.arc(lu,lv,mark*2.2,0,7); x.stroke();
+    const [eu,ev]=P(TRACK.desc[TRACK.desc.length-1]); x.strokeStyle="#fff"; x.lineWidth=lw*1.2; x.beginPath(); x.moveTo(eu-mark,ev-mark); x.lineTo(eu+mark,ev+mark); x.moveTo(eu+mark,ev-mark); x.lineTo(eu-mark,ev+mark); x.stroke();
+    const t=new THREE.CanvasTexture(c); t.anisotropy=8; t.generateMipmaps=true; res(t); }; im.onerror=()=>res(null); im.src=url; });
+}
+Promise.all([overlayTexture("wide.jpg",WIDE_B,2048,3,5),overlayTexture("near.jpg",NEAR_B,1024,3,6)]).then(([w,n])=>{
+  if(!w||!n) return;
+  const u=skyMat.uniforms; u.tWide.value=w; u.tNear.value=n; u.uHasTex.value=1;
+  u.uWideB.value.set(WIDE_B[0]*D2R,WIDE_B[1]*D2R,WIDE_B[2]*D2R,WIDE_B[3]*D2R);
+  u.uNearB.value.set(NEAR_B[0]*D2R,NEAR_B[1]*D2R,NEAR_B[2]*D2R,NEAR_B[3]*D2R);
+});
+const fmtLL=([la,lo])=>`${la.toFixed(3).replace(".",",")}° N ${lo.toFixed(3).replace(".",",")}° E`;
 /* =========================== HUD =========================== */
 const tIn=$("t");
 function setRange(keepFrac){ const f=keepFrac!=null?keepFrac:null; tIn.min=-PRE; tIn.max=Math.round(M.TEND); if(f!=null) tIn.value=Math.round(-PRE+f*(M.TEND+PRE)); buildMarks(); }
@@ -495,6 +557,12 @@ function updateHud(t,d){
     ["ICM-42688",`${d.acc.map(x=>nf(x,2)).join(" / ")} g`,s.phase==="BURST"?pill("warn","РЫВОК"):pill("ok","НОРМА"),s.phase==="BURST"?"Невесомость и кувырок до раскрытия парашюта (условно).":""],
   ];
   $("sens").innerHTML=rows.map(([n,v,st,w])=>`<div class="srow"><span class="n">${n}${st}</span><span class="val">${v}</span>${w?`<span class="why">${w}</span>`:""}</div>`).join("");
+  const here=posAt(s), land=TRACK.desc[TRACK.desc.length-1];
+  $("site").innerHTML=[
+    ["Старт",SITE.name,"",fmtLL([SITE.lat,SITE.lon])],
+    ["Сейчас",nf(kmBetween([SITE.lat,SITE.lon],here),1),"км от старта",fmtLL(here)],
+  ].map(([k,v,u,sub])=>`<div class="num"><span class="lbl">${k}</span><div class="v" style="font-size:14px">${v}<small>${u}</small></div><div class="s">${sub}</div></div>`).join("");
+  $("site-note").textContent=`Траектория — прогноз Tawhiri на ${TRACK.date.slice(8,10)}.${TRACK.date.slice(5,7)}.${TRACK.date.slice(0,4)}, посадка в ${nf(kmBetween([SITE.lat,SITE.lon],land),0)} км. Для пуска в феврале–марте прогноз нужно пересчитать.`;
   const seq=Math.max(0,Math.floor((t+PRE)/.2)), f2=x=>x.toFixed(2), f1=x=>x.toFixed(1);
   const valid=0x17|(d.fix?0x08:0);
   $("frm").textContent=`FRM seq=${seq} t=${Math.max(0,Math.round((t+PRE)*1000))} | BARO p=${f2(a.P)} T=${f2(d.Tin)} rel=${f2(d.rel)} | IMU a=${d.acc.map(f2).join(",")} g=${d.gyr.map(f1).join(",")} | GPS fix=${d.fix?1:0} sats=${d.fix?11:0} view=${d.fix?18:14} alt=${f1(d.fix?s.h:0)} | OUT T=${f2(d.Tout)} | valid=0x${valid.toString(16).toUpperCase().padStart(2,"0")} model@boot=${gpsAirborne?8:0}`;
@@ -571,6 +639,7 @@ function frame(){
   const camAlt=Math.max(1,s.h+(ground?1.2:0)+camera.position.y);
   const R=6371000, k=R/(R+camAlt);
   skyMat.uniforms.uAlt.value=camAlt; skyMat.uniforms.uDip2.value=(1-k)*(1+k);
+  const ll=posAt(s); skyMat.uniforms.uLat0.value=ll[0]*D2R; skyMat.uniforms.uLon0.value=ll[1]*D2R;
   sky.position.copy(camera.position);
   const f=Math.exp(-camAlt/7500);
   hemi.color.setRGB(.25+.45*f,.35+.45*f,.55+.4*f); hemi.intensity=.35+.45*f;

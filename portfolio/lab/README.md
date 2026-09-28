@@ -8,5 +8,7 @@ the real ones from the `hab_bringup` firmware.
 
 - `index.html` — the page (open via any static server: `python3 -m http.server` here).
 - `board.js` — the PCB as base64 GLB; rebuild after PCB changes with `./build_board.sh`.
+- `wide.jpg`, `near.jpg` — NASA Blue Marble Next Generation (public domain, NASA GIBS) around the
+  launch site 15.8 N 102.5 E; the trajectory is an example Tawhiri forecast (see `mission/launch_site`).
 
 Published copy: https://claude.ai/artifact/VP8YPhxGNXckYP5Keu93rK
