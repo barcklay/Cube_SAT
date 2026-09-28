@@ -156,7 +156,7 @@ part("J9", "Connector_Generic:Conn_01x12", "LoRa E22-400M22S (adapter)", SOCK.fo
 c("C14", "47u", "+3V3", "GND", "modules", C1206)
 part("J10", "Connector_Generic:Conn_01x04", "OLED SSD1306 (bench)", SOCK.format(n=4),
      {"1": "GND", "2": "+3V3", "3": "I2C_SCL", "4": "I2C_SDA"}, "modules",
-     "CONFIRM order GND VCC SCL SDA")
+     "order GND VDD SCK SDA as on the module (checked 2026-09-29)")
 
 # Test points for the oscilloscope / logic analyzer
 for i, net in enumerate(["+3V3", "GND", "VBAT_PROT", "I2C_SCL", "I2C_SDA",

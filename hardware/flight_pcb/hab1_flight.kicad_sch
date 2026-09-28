@@ -14188,7 +14188,7 @@
 		)
 		(uuid "ee0ad8d3-844f-5dc8-aa52-adf09aa9f974")
 	)
-	(text "CONFIRM order GND VCC SCL SDA"
+	(text "order GND VDD SCK SDA as on the module (checked 2026-09-29)"
 		(exclude_from_sim no)
 		(at 431.8 137.16 0)
 		(effects
