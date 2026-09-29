@@ -105,6 +105,24 @@ button[aria-pressed="true"]{background:var(--txt);color:#0A0E14;border-color:var
 .splash h1{margin:0;font:700 34px var(--display)}
 .splash h1 b{color:var(--hab)}
 .splash p{margin:0;font:12px var(--mono);color:var(--dim);letter-spacing:.08em}
+.splash .tag{font:400 15px/1.45 var(--body);color:var(--txt);letter-spacing:0;max-width:34ch}
+.accent{background:var(--hab);border-color:var(--hab);color:#1A0E08;font-weight:600}
+.accent:hover{border-color:#fff}
+.accent[aria-pressed="true"]{background:var(--txt);border-color:var(--txt)}
+.intro{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(440px,calc(100% - 32px));z-index:6;
+  background:var(--glass-hi);border:1px solid var(--edge);border-radius:8px;backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  padding:22px;display:grid;gap:14px}
+.intro h2{margin:0;font:600 20px/1.25 var(--display)}
+.intro dl{margin:0;display:grid;gap:10px}
+.intro dt{font:500 10px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--hab)}
+.intro dd{margin:2px 0 0;font-size:14px;line-height:1.45}
+.intro .row{display:flex;gap:8px;flex-wrap:wrap}
+.hint3d{position:fixed;left:0;top:0;z-index:3;pointer-events:auto;cursor:pointer;transform:translate(-50%,-100%);
+  font:500 12px/1.3 var(--body);color:#1A0E08;background:var(--hab);border-radius:4px;padding:6px 10px;white-space:nowrap;
+  box-shadow:0 4px 18px rgba(0,0,0,.35)}
+.hint3d::after{content:"";position:absolute;left:50%;bottom:-6px;transform:translateX(-50%);border:6px solid transparent;border-bottom:0;border-top-color:var(--hab)}
+@media (prefers-reduced-motion: no-preference){.hint3d{animation:bob 1.6s ease-in-out infinite}}
+@keyframes bob{0%,100%{margin-top:0}50%{margin-top:-5px}}
 .bar{width:180px;height:2px;background:rgba(255,255,255,.1);overflow:hidden;border-radius:2px}
 .bar i{display:block;height:100%;width:30%;background:var(--hab);animation:load 1.2s ease-in-out infinite}
 @keyframes load{0%{transform:translateX(-100%)}100%{transform:translateX(340%)}}
@@ -129,6 +147,7 @@ button[aria-pressed="true"]{background:var(--txt);color:#0A0E14;border-color:var
 <div class="splash" id="splash"><div>
   <h1>HAB-<b>1</b></h1>
   <div class="bar"><i></i></div>
+  <p class="tag">Самодельный зонд, который поднимется на метеошаре на 30 км в стратосферу, соберёт данные и вернётся на парашюте</p>
   <p id="splash-msg">надуваем шар…</p>
 </div></div>
 
@@ -136,13 +155,13 @@ button[aria-pressed="true"]{background:var(--txt);color:#0A0E14;border-color:var
   <div class="top">
     <div class="brand">
       <h1>HAB-<b>1</b></h1>
-      <p>Самодельный бортовой компьютер для стратосферного шара. Полёт посчитан по модели атмосферы, плата внутри зонда взята из KiCad-проекта.</p>
+      <p>Зонд поднимется на метеошаре на 30 км, соберёт данные и вернётся на парашюте. Бортовой компьютер, плату и корпус делаю сама.</p>
     </div>
     <div class="views" role="group" aria-label="Камера">
       <button id="v-probe" aria-pressed="true">Зонд</button>
       <button id="v-train" aria-pressed="false">Весь подвес</button>
       <button id="v-top" aria-pressed="false">Сверху</button>
-      <button id="v-inside" aria-pressed="false">Внутри</button>
+      <button id="v-inside" class="accent" aria-pressed="false">Заглянуть внутрь</button>
       <button id="about-btn">О модели</button>
     </div>
   </div>
@@ -191,6 +210,21 @@ button[aria-pressed="true"]{background:var(--txt);color:#0A0E14;border-color:var
     <div class="frm" id="frm" title="Строка кадра в формате FramePrint прошивки, значения из модели"></div>
   </div>
 </div>
+
+<div class="intro" id="intro" role="dialog" aria-label="Что это" hidden>
+  <h2>HAB-1: полёт в стратосферу</h2>
+  <dl>
+    <div><dt>Что это</dt><dd>Самодельный бортовой компьютер для метеошара: плату, прошивку и корпус делаю сама.</dd></div>
+    <div><dt>Зачем</dt><dd>Подняться на 30 км, измерить холод, давление и ветер на высоте и вернуть данные и снимки. Первый запуск — в Таиланде, 2027.</dd></div>
+    <div><dt>Что здесь</dt><dd>Симуляция полёта. Время двигается внизу, датчики справа. Внутри коробки — настоящая плата из проекта.</dd></div>
+  </dl>
+  <div class="row">
+    <button id="intro-inside" class="accent">Заглянуть внутрь</button>
+    <button id="intro-fly">▶ Запустить полёт</button>
+    <button id="intro-close">Просто смотреть</button>
+  </div>
+</div>
+<button class="hint3d" id="hint3d" hidden>Внутри — бортовой компьютер · нажми</button>
 
 <aside class="about" id="about" hidden aria-label="О модели">
   <button class="close" id="about-close">Закрыть</button>
@@ -652,6 +686,35 @@ function frame(){
 }
 requestAnimationFrame(frame);
 setTimeout(()=>{$("splash").classList.add("gone");},900);
+
+/* First visit: say what this is and show where the inside is. */
+let seenInside=false;
+try{ seenInside=localStorage.getItem("hab1-seen-inside")==="1"; }catch(e){}
+function markInside(){ seenInside=true; $("hint3d").hidden=true; try{ localStorage.setItem("hab1-seen-inside","1"); }catch(e){} }
+const _setView=setView;
+setView=function(v){ _setView(v); if(v==="inside") markInside(); };
+$("v-inside").onclick=()=>setView("inside");
+$("hint3d").onclick=()=>setView("inside");
+function closeIntro(){ $("intro").hidden=true; }
+$("intro-inside").onclick=()=>{ closeIntro(); setView("inside"); };
+$("intro-fly").onclick=()=>{ closeIntro(); if(!playing) playBtn.click(); };
+$("intro-close").onclick=closeIntro;
+let introSeen=false;
+try{ introSeen=localStorage.getItem("hab1-intro")==="1"; }catch(e){}
+if(!introSeen){ setTimeout(()=>{ $("intro").hidden=false; try{ localStorage.setItem("hab1-intro","1"); }catch(e){} },1000); }
+addEventListener("keydown",e=>{ if(e.key==="Escape") closeIntro(); });
+/* the hint follows the box on screen while the box is in view */
+const hintPos=new THREE.Vector3();
+(function hintLoop(){
+  const h=$("hint3d");
+  if(!seenInside && view==="probe" && !fly && $("intro").hidden && $("about").hidden){
+    probe.getWorldPosition(hintPos); hintPos.y+=BOX[1]/2+.03; hintPos.project(camera);
+    const x=(hintPos.x+1)/2*innerWidth, y=(1-hintPos.y)/2*innerHeight;
+    const on=hintPos.z<1 && x>60 && x<innerWidth-60 && y>60 && y<innerHeight-60;
+    h.hidden=!on; if(on){ h.style.left=x+"px"; h.style.top=(y-10)+"px"; }
+  } else h.hidden=true;
+  requestAnimationFrame(hintLoop);
+})();
 if(document.fonts) document.fonts.ready.then(()=>{orangeLabel.map=labelTex();orangeLabel.needsUpdate=true;});
 </script>
 
