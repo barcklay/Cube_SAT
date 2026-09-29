@@ -216,7 +216,7 @@ button[aria-pressed="true"]{background:var(--txt);color:#0A0E14;border-color:var
   <dl>
     <div><dt>Что это</dt><dd>Самодельный бортовой компьютер для метеошара: плату, прошивку и корпус делаю сама.</dd></div>
     <div><dt>Зачем</dt><dd>Подняться на 30 км, измерить холод, давление и ветер на высоте и вернуть данные и снимки. Первый запуск — в Таиланде, 2027.</dd></div>
-    <div><dt>Что здесь</dt><dd>Симуляция полёта. Время двигается внизу, датчики справа. Внутри коробки — настоящая плата из проекта.</dd></div>
+    <div><dt>Что здесь</dt><dd>Симуляция полёта. Время двигается внизу, датчики справа. Нажми на коробку — она откроется, внутри настоящая плата из проекта; нажми ещё раз — закроется.</dd></div>
   </dl>
   <div class="row">
     <button id="intro-inside" class="accent">Заглянуть внутрь</button>
@@ -514,12 +514,28 @@ $("v-probe").onclick=()=>setView("probe"); $("v-train").onclick=()=>setView("tra
 /* picking in the inside view */
 const ray=new THREE.Raycaster(), mp=new THREE.Vector2(); let down=null;
 canvas.addEventListener("pointerdown",e=>{down=[e.clientX,e.clientY];});
+/* Click on the payload opens it; the same click again closes it. Inside, parts are
+   explained on mouse hover; on a touch screen a tap on a part explains it instead. */
+function probeHits(e){
+  mp.set(e.clientX/innerWidth*2-1,-(e.clientY/innerHeight)*2+1); ray.setFromCamera(mp,camera);
+  return ray.intersectObject(probe,true).filter(h=>h.object.visible&&partOf(h.object));
+}
+const innerHit=hits=>hits.find(h=>{ const k=partOf(h.object); return k!=="BOX"&&k!=="PROBE"; });
 canvas.addEventListener("pointerup",e=>{
   if(!down||Math.hypot(e.clientX-down[0],e.clientY-down[1])>5){down=null;return;} down=null;
-  mp.set(e.clientX/innerWidth*2-1,-(e.clientY/innerHeight)*2+1); ray.setFromCamera(mp,camera);
-  const hits=ray.intersectObject(probe,true).filter(h=>h.object.visible&&partOf(h.object));
-  let hit=hits[0]; if(view==="inside"){ const inner=hits.find(h=>partOf(h.object)!=="BOX"); if(inner) hit=inner; }
-  if(hit){ const k=partOf(hit.object); if(view!=="inside"&&k==="BOX"){ setView("inside"); } else showPart(k); }
+  const hits=probeHits(e); if(!hits.length) return;
+  if(view!=="inside"){ setView("inside"); return; }
+  const inner=innerHit(hits);
+  if(e.pointerType!=="mouse" && inner){ showPart(partOf(inner.object)); return; }
+  toggleInside();
+});
+let hoverPart=null;
+canvas.addEventListener("pointermove",e=>{
+  if(e.pointerType!=="mouse"||down) return;
+  const hits=probeHits(e); canvas.style.cursor=hits.length?"pointer":"";
+  if(view!=="inside") return;
+  const inner=innerHit(hits), k=inner?partOf(inner.object):null;
+  if(k&&k!==hoverPart){ hoverPart=k; showPart(k); }
 });
 
 
