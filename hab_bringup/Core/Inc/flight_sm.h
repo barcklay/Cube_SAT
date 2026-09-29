@@ -209,7 +209,10 @@ static inline int FlightSmUpdate(FlightSm *sm, uint32_t now_ms, float alt_m, int
   switch (sm->state)
   {
     case FS_PRELAUNCH:
-      if (FlightSmHeld(&sm->hold_a_ms, h > FS_LAUNCH_ALT_M * sm->scale && vz > FS_LAUNCH_VZ, now_ms, FS_LAUNCH_HOLD_MS))
+      /* Climbing steadily above 300 m, or simply 600 m up: a climb with pauses (turbulence,
+         or a lift stopping at floors in the lift test) must still count as a launch. */
+      if (FlightSmHeld(&sm->hold_a_ms, h > FS_LAUNCH_ALT_M * sm->scale && vz > FS_LAUNCH_VZ, now_ms, FS_LAUNCH_HOLD_MS) ||
+          h > 2.0f * FS_LAUNCH_ALT_M * sm->scale)
       {
         FlightSmGo(sm, FS_ASCENT, now_ms);
         sm->max_alt = h;

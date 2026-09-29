@@ -32,6 +32,7 @@ typedef struct
   double reset_at_s;     /* board reset in flight (resume from the log) */
   FlightState expect_final;
   int expect_burst, expect_float;
+  double stop_every_m;   /* ascent pauses (turbulence / a lift stopping at floors) */
 } Scenario;
 
 static int run(const Scenario *s)
@@ -43,6 +44,7 @@ static int run(const Scenario *s)
   double lift_done = 0;
   uint32_t seen[6] = {0};
   int reset_done = 0;
+  double next_stop = s->stop_every_m, pause_until = -1;
   double end_s = s->pre_s > 1e8 ? 8 * 3600.0 : s->pre_s + 30000;
   for (uint32_t ms = 0; t < end_s; ms += DT_MS, t = ms / 1000.0)
   {
@@ -52,7 +54,15 @@ static int run(const Scenario *s)
     if ((phase == 0 || phase == 2) && t >= s->pre_s) { phase = 3; h = s->lift_m; }
     if (phase == 3)
     {
-      h += s->ascent_vz * DT_MS / 1000.0;
+      if (t >= pause_until)
+      {
+        h += s->ascent_vz * DT_MS / 1000.0;
+        if (s->stop_every_m > 0 && h >= next_stop && h < 2000)
+        {
+          pause_until = t + 15;  /* stand still 15 s every stop_every_m metres */
+          next_stop += s->stop_every_m;
+        }
+      }
       if (h >= s->burst_m)
       {
         h = s->burst_m;
@@ -123,6 +133,8 @@ int main(void)
     {"barometer lost for 2 min at 12 km", 600, 5, 30000, 0, 0, 600, 1.0, 0, 0, 3000, 3120, 0, FS_LANDED, 1, 0},
     {"reset during the descent", 600, 5, 30000, 0, 0, 600, 1.0, 0, 0, -1, -1, 6900, FS_LANDED, 1, 0},
     {"on the bench for 8 h (never launched)", 1e9, 5, 30000, 0, 0, 0, 1.0, 0, 0, -1, -1, 0, FS_PRELAUNCH, 0, 0},
+    {"ascent with pauses every 60 m", 600, 5, 30000, 0, 0, 600, 1.0, 0, 0, -1, -1, 0, FS_LANDED, 1, 0, 60},
+    {"stop-and-go every 20 m (like a lift)", 600, 5, 30000, 0, 0, 600, 1.0, 0, 0, -1, -1, 0, FS_LANDED, 1, 0, 20},
   };
   int pass = 0, n = sizeof(sc) / sizeof(sc[0]);
   for (int i = 0; i < n; i++)
