@@ -117,6 +117,9 @@ button[aria-pressed="true"]{background:var(--txt);color:#0A0E14;border-color:var
 .intro dt{font:500 10px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--hab)}
 .intro dd{margin:2px 0 0;font-size:14px;line-height:1.45}
 .intro .row{display:flex;gap:8px;flex-wrap:wrap}
+.modlabel{position:fixed;left:0;top:0;z-index:3;pointer-events:none;transform:translate(-50%,-100%);
+  font:500 11px/1.2 var(--mono);color:var(--txt);background:rgba(8,12,20,.78);border:1px solid var(--edge);
+  border-radius:3px;padding:3px 7px;white-space:nowrap}
 .hint3d{position:fixed;left:0;top:0;z-index:3;pointer-events:auto;cursor:pointer;transform:translate(-50%,-100%);
   font:500 12px/1.3 var(--body);color:#1A0E08;background:var(--hab);border-radius:4px;padding:6px 10px;white-space:nowrap;
   box-shadow:0 4px 18px rgba(0,0,0,.35)}
@@ -453,15 +456,28 @@ const boardGroup=new THREE.Group(); boardGroup.position.set(-.04,-.022,0); insid
 const BW=.09589,BH=.09017;
 for(const [x,z] of [[.004,.004],[BW-.004,.004],[.004,BH-.004],[BW-.004,BH-.004]]){
   const st=new THREE.Mesh(new THREE.CylinderGeometry(.0025,.0025,.024,12),petg); st.position.set(x-BW/2,-.011,z-BH/2); st.userData.part="SLED"; boardGroup.add(st);}
-const MODS={GPS:[58,4,26,22,0x2c4f86],LORA:[70,18,24,34,0x8a939c],IMU:[4,52,20,22,0x4a3a8c],BARO:[18,66,16,16,0x5b3f9a],FLASH:[4,28,20,18,0x2d6a4a]};
+/* Plug-in modules: board colour as the real breakouts (GPS black, barometer and flash blue,
+   IMU purple), the main chip, and the row of male pins that goes into the socket. */
+const MODS={GPS:[58,4,26,22,0x16181b,"x",64,6,5,0xb9bec4],LORA:[70,18,24,34,0x1d3564,"y",90,22,12,0xc9ced3],
+  IMU:[4,52,20,22,0x4b2380,"y",8,56,8,0x1b1d20],BARO:[18,66,16,16,0x1f4a9c,"y",22,70,7,0x1b1d20],FLASH:[4,28,20,18,0x1f3f8f,"y",8,32,6,0x1b1d20]};
 const modGroups=[];
-for(const [k,[x,y,w,h,col]] of Object.entries(MODS)){
+const pinMat=new THREE.MeshStandardMaterial({color:0x0e0f11,roughness:.7});
+const goldMat=new THREE.MeshStandardMaterial({color:0xd4a64a,metalness:.8,roughness:.35});
+for(const [k,[x,y,w,h,col,ax,sx,sy,n,chipCol]] of Object.entries(MODS)){
   const g=new THREE.Group(); g.userData.part=k;
-  const pcb=new THREE.Mesh(new THREE.BoxGeometry(w/1000,.0016,h/1000),new THREE.MeshStandardMaterial({color:col,roughness:.6}));pcb.userData.part=k;g.add(pcb);
+  const pcb=new THREE.Mesh(new THREE.BoxGeometry(w/1000,.0016,h/1000),new THREE.MeshStandardMaterial({color:col,roughness:.55}));pcb.userData.part=k;g.add(pcb);
   const cw=(k==="LORA"?w*.7:Math.min(w,h)*.42)/1000, ch=(k==="LORA"?h*.55:Math.min(w,h)*.42)/1000;
-  const chip=new THREE.Mesh(new THREE.BoxGeometry(cw,k==="LORA"?.0022:.0012,ch),new THREE.MeshStandardMaterial({color:k==="LORA"?0xc9ced3:0x1b1d20,metalness:k==="LORA"?.7:.2,roughness:.4}));
+  const metal=k==="LORA"||k==="GPS";
+  const chip=new THREE.Mesh(new THREE.BoxGeometry(cw,metal?.0022:.0012,ch),new THREE.MeshStandardMaterial({color:chipCol,metalness:metal?.7:.2,roughness:.4}));
   chip.position.y=.0015; chip.userData.part=k; g.add(chip);
-  g.position.set((x+w/2)/1000-BW/2,.0106,(y+h/2)/1000-BH/2); g.userData.baseY=g.position.y; boardGroup.add(g); modGroups.push(g);
+  const cx=(x+w/2), cy=(y+h/2);
+  g.position.set(cx/1000-BW/2,.0106,cy/1000-BH/2); g.userData.baseY=g.position.y; boardGroup.add(g); modGroups.push(g);
+  // pin row under the module, over its socket: black plastic strip + gold pins below it
+  const len=n*2.54/1000, px=(ax==="x"?sx+len*500:sx)-cx, pz=(ax==="y"?sy+len*500:sy)-cy;
+  const strip=new THREE.Mesh(new THREE.BoxGeometry(ax==="x"?len:.0025,.0025,ax==="x"?.0025:len),pinMat);
+  strip.position.set(px/1000,-.0021,pz/1000); strip.userData.part=k; g.add(strip);
+  for(let i=0;i<n;i++){ const pin=new THREE.Mesh(new THREE.BoxGeometry(.0006,.006,.0006),goldMat);
+    const o=(i+.5)*.00254-len/2; pin.position.set(px/1000+(ax==="x"?o:0),-.0063,pz/1000+(ax==="y"?o:0)); pin.userData.part=k; g.add(pin); }
 }
 const cam=new THREE.Group(); cam.position.set(.075,.005,0); inside.add(cam);
 const camBody=new THREE.Mesh(new THREE.BoxGeometry(.034,.05,.071),new THREE.MeshStandardMaterial({color:0x1c1e22,roughness:.5})); camBody.userData.part="CAM"; cam.add(camBody);
@@ -501,7 +517,7 @@ function partOf(o){ while(o){ if(o.userData.part) return o.userData.part; if(o.u
 const VIEWS={
   probe:{pos:new THREE.Vector3(1.05,.55,1.35),target:new THREE.Vector3(0,.05,0)},
   train:{pos:new THREE.Vector3(9,1.2,15),target:new THREE.Vector3(0,4.6,0)},
-  inside:{pos:new THREE.Vector3(.28,.2,.3),target:new THREE.Vector3(-.01,-.01,0)},
+  inside:{pos:new THREE.Vector3(.16,.15,.17),target:new THREE.Vector3(-.02,-.012,0)},
   top:{pos:new THREE.Vector3(.02,2.6,.02),target:new THREE.Vector3(0,0,0)},
 };
 let view="probe", fly=null, insideAmt=0;
@@ -683,7 +699,7 @@ function frame(){
   // inside x-ray
   insideAmt+=((view==="inside"?1:0)-insideAmt)*Math.min(1,dt*5);
   inside.visible=insideAmt>.02;
-  orange.opacity=orangeLabel.opacity=1-insideAmt*.86; orange.depthWrite=orangeLabel.depthWrite=insideAmt<.5;
+  orange.opacity=orangeLabel.opacity=1-insideAmt;  /* walls and the label vanish inside, edges stay */ orange.depthWrite=orangeLabel.depthWrite=insideAmt<.5;
   boxEdges.material.opacity=insideAmt*.9;
   modGroups.forEach(g=>g.position.y=g.userData.baseY+insideAmt*.018);
   flag.visible=s.phase==="PRELAUNCH";
@@ -730,6 +746,32 @@ try{ introSeen=localStorage.getItem("hab1-intro")==="1"; }catch(e){}
 if(!introSeen){ setTimeout(()=>{ $("intro").hidden=false; try{ localStorage.setItem("hab1-intro","1"); }catch(e){} },1000); }
 addEventListener("keydown",e=>{ if(e.key!=="Escape") return;
   if(!$("intro").hidden) closeIntro(); else if(view==="inside" && $("about").hidden) toggleInside(); });
+/* Inside: a short name over each part, so nobody has to guess what the plates are. */
+const LABELS=[["GPS","GPS"],["LORA","Радио LoRa"],["IMU","IMU (гироскоп)"],["BARO","Барометр"],["FLASH","Флешка (чёрный ящик)"],
+  ["U1","Процессор STM32"],["BATT","Батареи"],["CAM","Камера"]];
+const labelEls=LABELS.map(([k,t])=>{ const d=document.createElement("div"); d.className="modlabel"; d.textContent=t; d.hidden=true; document.body.appendChild(d); return [k,d]; });
+const anchorOf=k=>{ const m=modGroups.find(g=>g.userData.part===k); if(m) return m;
+  if(k==="U1") return boardGroup; if(k==="BATT") return holder; if(k==="CAM") return cam; return null; };
+const lp=new THREE.Vector3();
+(function labelLoop(){
+  const on=view==="inside" && insideAmt>.9 && !fly && $("about").hidden;
+  const shown=[];
+  for(const [k,d] of labelEls){
+    const a=anchorOf(k); if(!on||!a){ d.hidden=true; continue; }
+    a.getWorldPosition(lp); lp.y+= k==="CAM"?.03 : k==="BATT"?.012 : .008; lp.project(camera);
+    const x=(lp.x+1)/2*innerWidth, y=(1-lp.y)/2*innerHeight-6;
+    d.hidden=!(lp.z<1 && x>0 && x<innerWidth && y>0 && y<innerHeight);
+    if(!d.hidden) shown.push({d,x,y,w:d.offsetWidth||120});
+  }
+  /* labels that would overlap move up, one row at a time */
+  shown.sort((a,b)=>b.y-a.y);
+  const placed=[];
+  for(const L of shown){
+    for(let i=0;i<8 && placed.some(P=>Math.abs(P.x-L.x)<(P.w+L.w)/2+6 && Math.abs(P.y-L.y)<22);i++) L.y-=22;
+    placed.push(L); L.d.style.left=L.x+"px"; L.d.style.top=L.y+"px";
+  }
+  requestAnimationFrame(labelLoop);
+})();
 /* the hint follows the box on screen while the box is in view */
 const hintPos=new THREE.Vector3();
 (function hintLoop(){
