@@ -55,6 +55,9 @@ pre b{color:var(--hab);font-weight:500}
   padding:12px 14px;display:grid;gap:4px;font-size:13px;pointer-events:none}
 .gtip b{font:600 14px var(--body)}
 .gtip span{color:var(--dim);font-family:var(--mono);font-size:12px}
+.gback{position:absolute;left:12px;top:12px;font:500 12px var(--body);color:var(--txt);background:rgba(10,15,26,.9);
+  border:1px solid var(--edge);border-radius:4px;padding:8px 12px;cursor:pointer}
+.gback:focus-visible{outline:2px solid var(--hab);outline-offset:2px}
 .ghint{position:absolute;left:12px;bottom:10px;font:11px var(--mono);color:var(--faint);pointer-events:none}
 footer{padding-block:24px;border-top:1px solid var(--edge);font:12px var(--mono);color:var(--faint)}
 a{color:var(--hab)}
@@ -70,12 +73,13 @@ a{color:var(--hab)}
 
 <section>
   <h2>Где эти спутники на самом деле</h2>
-  <p class="note">Земля, орбиты и расстояния в одном масштабе. Каждый спутник стоит там, где его в тот момент видел модуль GPS в Бангкоке, а линия — путь его сигнала до зонда. Все линии уходят на юг и запад: туда смотрит окно, остальное небо закрывает дом. Ещё 21 спутник BeiDou слышен, но где он, приёмник пока не знает, поэтому на глобусе его нет. Высота и наклон каждой орбиты настоящие, а её поворот нарисован условно: по одному наблюдению не видно, в какую сторону летит спутник.</p>
+  <p class="note">Земля, орбиты и расстояния в одном масштабе. Каждый спутник стоит там, где его в тот момент видел модуль GPS в Бангкоке, а линия — путь его сигнала до зонда. Все линии уходят на юг и запад: туда смотрит окно, остальное небо закрывает дом. Ещё 21 спутник BeiDou слышен, но где он, приёмник пока не знает, поэтому на глобусе его нет. Солнце стоит там, где было в момент записи: Бангкок уже на ночной стороне, а спутники высоко и ещё освещены. Высота и наклон каждой орбиты настоящие, поворот орбиты нарисован условно (по одному наблюдению не видно, куда летит спутник), а сами спутники увеличены в сотни тысяч раз — иначе их не разглядеть. Нажми на спутник, чтобы подлететь к нему.</p>
   <div class="globe" id="globeBox">
     <canvas id="globe" aria-label="Глобус: Бангкок и спутники, которые видит GPS зонда"></canvas>
     <div id="glabels"></div>
     <div class="gtip" id="gtip"></div>
-    <div class="ghint">тянуть — вращать · колесо / щипок — масштаб · наведи на спутник</div>
+    <div class="ghint">тянуть — вращать · колесо / щипок — масштаб · нажми на спутник, чтобы подлететь</div>
+    <button class="gback" id="gback" hidden>← Вся картина</button>
   </div>
 </section>
 
@@ -213,8 +217,12 @@ function draw(){ drawSky(); drawBars(); }
   const scene=new THREE.Scene(), camera=new THREE.PerspectiveCamera(40,1,.05,400);
   const controls=new THREE.OrbitControls(camera,canvas); controls.enableDamping=true; controls.enablePan=false;
   controls.minDistance=2.2; controls.maxDistance=40;
-  scene.add(new THREE.AmbientLight(0xffffff,.95));
-  const sun=new THREE.DirectionalLight(0xffffff,.35); sun.position.set(5,3,5); scene.add(sun);
+  // The Sun where it really was: 29.09.2026 14:44 UTC (21:44 in Bangkok). Declination -2.4°,
+  // subsolar longitude = -(UTC-12h)*15° + equation of time (+9.9 min) -> about -38.8°.
+  const SUN_LAT=-2.4*D2R, SUN_LON=-38.8*D2R;
+  const SUN=new THREE.Vector3(Math.cos(SUN_LAT)*Math.cos(SUN_LON),Math.sin(SUN_LAT),-Math.cos(SUN_LAT)*Math.sin(SUN_LON)).normalize();
+  scene.add(new THREE.AmbientLight(0x8a9cc0,.6));
+  const sun=new THREE.DirectionalLight(0xfff4e0,2.2); sun.position.copy(SUN).multiplyScalar(50); scene.add(sun);
 
   // stars
   const sp=[]; for(let i=0;i<1600;i++){ const u=Math.random()*2-1,a=Math.random()*6.283,r=Math.sqrt(1-u*u); sp.push(r*Math.cos(a)*180,u*180,r*Math.sin(a)*180); }
@@ -231,12 +239,15 @@ function draw(){ drawSky(); drawBars(); }
   // land as a field of dots: which grid points are land is read from a NASA Blue Marble image
   const img=new Image(); img.onload=()=>{
     const c=document.createElement("canvas"); c.width=720; c.height=360; const x=c.getContext("2d"); x.drawImage(img,0,0,720,360);
-    const px=x.getImageData(0,0,720,360).data, dots=[];
+    const px=x.getImageData(0,0,720,360).data, dots=[], cols=[];
+    const day=new THREE.Color(0x8fb2dc), night=new THREE.Color(0x24344f), tmp=new THREE.Color(), pv=new THREE.Vector3();
     for(let lat=-84;lat<=84;lat+=1.4){ const step=1.4/Math.max(.15,Math.cos(lat*D2R));
       for(let lon=-180;lon<180;lon+=step){ const i=((Math.round((90-lat)*2)%360)*720+Math.round((lon+180)*2)%720)*4;
-        const r=px[i],g=px[i+1],b=px[i+2]; const ocean=b>r+8&&b>=g-4&&r<70; if(!ocean) dots.push(...gp(lat,lon)); } }
+        const r=px[i],g=px[i+1],b=px[i+2]; const ocean=b>r+8&&b>=g-4&&r<70; if(!ocean){ const q=gp(lat,lon); dots.push(...q);
+          const lit=Math.max(0,Math.min(1,pv.set(q[0],q[1],q[2]).normalize().dot(SUN)*4+.5)); tmp.copy(night).lerp(day,lit); cols.push(tmp.r,tmp.g,tmp.b); } } }
     const dg=new THREE.BufferGeometry(); dg.setAttribute("position",new THREE.Float32BufferAttribute(dots,3));
-    scene.add(new THREE.Points(dg,new THREE.PointsMaterial({color:0x5f7fa8,size:.016,sizeAttenuation:true})));
+    dg.setAttribute("color",new THREE.Float32BufferAttribute(cols,3));
+    scene.add(new THREE.Points(dg,new THREE.PointsMaterial({vertexColors:true,size:.016,sizeAttenuation:true})));
   }; img.src="world.jpg";
   const glow=new THREE.ShaderMaterial({transparent:true,side:THREE.BackSide,depthWrite:false,blending:THREE.AdditiveBlending,
     vertexShader:"varying vec3 n; void main(){ n=normalize(normalMatrix*normal); gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }",
@@ -272,11 +283,44 @@ function draw(){ drawSky(); drawBars(); }
   // satellites + signal lines
   const COLN=Object.fromEntries(Object.entries(COL).map(([k,v])=>[k,new THREE.Color(v)]));
   const pick=[];
+  // Satellite models: gold-foil body, two solar wings turned to the Sun, antennas facing the Earth.
+  // Drawn hundreds of thousands of times larger than life, otherwise invisible at this scale.
+  const cellTex=(()=>{ const c=document.createElement("canvas"); c.width=64; c.height=256; const x=c.getContext("2d");
+    x.fillStyle="#132a5c"; x.fillRect(0,0,64,256); x.strokeStyle="#3a5a9a"; x.lineWidth=1.5;
+    for(let i=0;i<=64;i+=16){ x.beginPath(); x.moveTo(i,0); x.lineTo(i,256); x.stroke(); }
+    for(let j=0;j<=256;j+=16){ x.beginPath(); x.moveTo(0,j); x.lineTo(64,j); x.stroke(); }
+    const t=new THREE.CanvasTexture(c); t.encoding=THREE.sRGBEncoding; return t; })();
+  const panelMat=new THREE.MeshStandardMaterial({map:cellTex,metalness:.35,roughness:.35,side:THREE.DoubleSide});
+  const foilMat=new THREE.MeshStandardMaterial({color:0xd6a64a,metalness:.9,roughness:.35});
+  const whiteMat=new THREE.MeshStandardMaterial({color:0xe8e8e2,metalness:.2,roughness:.5});
+  const boomMat=new THREE.MeshStandardMaterial({color:0x9aa2ab,metalness:.7,roughness:.4});
+  function makeSat(s){
+    const geo=orbitKm(s)===42164, g=new THREE.Group(), k=geo?1.25:1;
+    const body=new THREE.Mesh(new THREE.BoxGeometry(.11*k,.11*k,.14*k),foilMat); g.add(body);
+    const wingL=geo?.62:.42;
+    [-1,1].forEach(side=>{
+      const boom=new THREE.Mesh(new THREE.CylinderGeometry(.006,.006,.08,6),boomMat);
+      boom.rotation.z=Math.PI/2; boom.position.x=side*(.055*k+.04); g.add(boom);
+      const wing=new THREE.Mesh(new THREE.BoxGeometry(wingL,.004,.13*k),panelMat);
+      wing.position.x=side*(.055*k+.08+wingL/2); wing.userData.wing=true; g.add(wing);
+    });
+    // antenna panel on the Earth side (-Z of the model), a dish on geostationary ones
+    const ant=new THREE.Mesh(new THREE.BoxGeometry(.08*k,.08*k,.01),whiteMat); ant.position.z=-.075*k; g.add(ant);
+    if(geo){ const dish=new THREE.Mesh(new THREE.SphereGeometry(.06,20,10,0,6.283,0,1.1),whiteMat); dish.rotation.x=Math.PI/2; dish.position.set(.03,.04,-.1); g.add(dish); }
+    // attitude: -Z (antennas) to the Earth, wings along the axis perpendicular to the Sun and nadir
+    const nadir=s.pos.clone().normalize().negate();
+    const wingAxis=new THREE.Vector3().crossVectors(nadir,SUN).normalize();
+    const zAxis=nadir.clone().negate(), xAxis=wingAxis, yAxis=new THREE.Vector3().crossVectors(zAxis,xAxis);
+    g.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(xAxis,yAxis,zAxis));
+    // turn the wings about their axis to face the Sun as well as they can
+    g.children.forEach(c=>{ if(c.userData.wing){ const sunLocal=SUN.clone().applyQuaternion(g.quaternion.clone().invert());
+      c.rotation.x=Math.atan2(sunLocal.z,sunLocal.y); } });
+    g.position.copy(s.pos); g.scale.setScalar(1.2); return g;
+  }
   placed.forEach(s=>{
     const strong=Math.min(1,Math.max(.25,((s.snr||12)-10)/30));
-    const m=new THREE.Mesh(new THREE.SphereGeometry(.07+.08*strong,20,14),new THREE.MeshBasicMaterial({color:COLN[s.sys]}));
-    m.position.copy(s.pos); scene.add(m);
-    const halo=new THREE.Mesh(new THREE.SphereGeometry(.16+.16*strong,20,14),new THREE.MeshBasicMaterial({color:COLN[s.sys],transparent:true,opacity:.12,depthWrite:false}));
+    scene.add(makeSat(s));
+    const halo=new THREE.Mesh(new THREE.SphereGeometry(.26,20,14),new THREE.MeshBasicMaterial({color:COLN[s.sys],transparent:true,opacity:.07,depthWrite:false}));
     halo.position.copy(s.pos); halo.userData.sat=s; scene.add(halo); pick.push(halo);
     const lg=new THREE.BufferGeometry().setFromPoints([home,s.pos]);
     scene.add(new THREE.Line(lg,new THREE.LineBasicMaterial({color:COLN[s.sys],transparent:true,opacity:.2+.6*strong})));
@@ -302,10 +346,27 @@ function draw(){ drawSky(); drawBars(); }
   canvas.addEventListener("pointermove",e=>{ const r=canvas.getBoundingClientRect(); mv.set((e.clientX-r.left)/r.width*2-1,-((e.clientY-r.top)/r.height)*2+1);
     ray.setFromCamera(mv,camera); const h=ray.intersectObjects(pick)[0]; if(h){ setTip(h.object.userData.sat); canvas.style.cursor="pointer"; } else canvas.style.cursor="grab"; });
 
+  // click a satellite: fly close to it; "Вся картина" flies back
+  let fly=null, down=null;
+  const flyTo=(pos,target)=>{ fly={p0:camera.position.clone(),t0:controls.target.clone(),p1:pos,t1:target,k:0}; };
+  canvas.addEventListener("pointerdown",e=>{down=[e.clientX,e.clientY];});
+  canvas.addEventListener("pointerup",e=>{
+    if(!down||Math.hypot(e.clientX-down[0],e.clientY-down[1])>5){down=null;return;} down=null;
+    const r=canvas.getBoundingClientRect(); mv.set((e.clientX-r.left)/r.width*2-1,-((e.clientY-r.top)/r.height)*2+1);
+    ray.setFromCamera(mv,camera); const h=ray.intersectObjects(pick)[0]; if(!h) return;
+    const s=h.object.userData.sat; setTip(s);
+    const side=new THREE.Vector3().crossVectors(s.pos.clone().normalize(),SUN).normalize();
+    const eye=s.pos.clone().add(SUN.clone().multiplyScalar(.9)).add(side.multiplyScalar(.6)).add(s.pos.clone().normalize().multiplyScalar(.4));
+    flyTo(eye,s.pos.clone()); document.getElementById("gback").hidden=false;
+  });
+
   // camera: from space above the Indian Ocean, looking at Bangkok and the satellites it hears
   const c=placed.reduce((a,s)=>a.add(s.pos),new THREE.Vector3()).multiplyScalar(1/placed.length);
   controls.target.copy(c.clone().multiplyScalar(.45));
   camera.position.copy(c.clone().normalize().multiplyScalar(6).add(new THREE.Vector3(0,4,0)).add(c.clone().normalize().cross(new THREE.Vector3(0,1,0)).multiplyScalar(-9)).multiplyScalar(1.6));  // far enough to see whole orbits
+  const HOME_P=camera.position.clone(), HOME_T=controls.target.clone();
+  document.getElementById("gback").onclick=()=>{ flyTo(HOME_P.clone(),HOME_T.clone()); document.getElementById("gback").hidden=true; };
+  controls.minDistance=.3;
   function resize(){ const w=box.clientWidth,h=box.clientHeight; renderer.setSize(w,h,false); camera.aspect=w/h; camera.updateProjectionMatrix(); }
   new ResizeObserver(resize).observe(box); resize();
 
@@ -316,6 +377,8 @@ function draw(){ drawSky(); drawBars(); }
     return disc>0 && (-b-Math.sqrt(disc))>0 && (-b-Math.sqrt(disc))<dist; };
   let t0=performance.now();
   (function loop(now){
+    if(fly){ fly.k=Math.min(1,fly.k+.02); const e=1-Math.pow(1-fly.k,3);
+      camera.position.lerpVectors(fly.p0,fly.p1,e); controls.target.lerpVectors(fly.t0,fly.t1,e); if(fly.k>=1) fly=null; }
     controls.update();
     const k=((now-t0)/1400)%1; pulse.scale.setScalar(1+k*2.5); pulse.material.opacity=1-k;
     const w=box.clientWidth,h=box.clientHeight;
