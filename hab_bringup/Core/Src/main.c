@@ -213,6 +213,10 @@ _Static_assert(sizeof(LogRecord) == 128, "LogRecord must be 128 bytes");
 
 /* Flight state machine (HW-18) */
 #define FRAME_SIM        0x80U  /* frame from the 'S' simulation: the altitude is synthetic */
+#define FRAME_TEST       0x40U  /* frame in the 'T' lift test: real altitude, thresholds x0.05 */
+#define TEST_SCALE       0.05f
+#define TEST_LANDED_MAX  10.0f  /* lift test: landing only within 10 m of the start floor,
+                                   so a lift stopping on the way down is not a landing */
 #define LANDED_LOG_EVERY 50U    /* after landing one record per 10 s: the flash lasts for days */
 #define BUZZER_EVERY_N   15U    /* after landing: one 200 ms beep every 3 s */
 #define SIM_SPEED        40.0   /* 'S' simulation runs 40x faster than a real flight */
@@ -245,6 +249,8 @@ static double asl_offset; /* altitude above sea level = IsaAltitude(p) + asl_off
 static uint8_t asl_src = ASL_STD;
 static FlightSm fsm;
 static int sim_active;
+static int test_mode;     /* 'T' lift test: a lift ride is a small flight */
+static int reset_by_programmer;  /* this boot comes from st-flash, not from a fault */
 static uint32_t sim_start_ms;
 static uint32_t sim_rng = 12345U;
 static LogRecord log_last;  /* last valid record found at boot: to continue after a reset */
@@ -1808,6 +1814,10 @@ static void FlightUpdate(TelemetryFrame *f, double press_pa, int baro_ok)
     alt = f->gps_alt_m - (IsaAltitude(ground_pa) + asl_offset);
     alt_ok = 1;
   }
+  if (test_mode)
+  {
+    f->valid |= FRAME_TEST;
+  }
   if (sim_active)
   {
     alt = SimAltitude(f->t_ms);
@@ -1843,17 +1853,26 @@ static void FlightResume(int bmp_ok)
   {
     return;
   }
-  int unplanned = reset_cause == RESET_WATCHDOG || reset_cause == RESET_SOFTWARE ||
-                  reset_cause == RESET_BROWNOUT;
+  int unplanned = (reset_cause == RESET_WATCHDOG || reset_cause == RESET_SOFTWARE ||
+                   reset_cause == RESET_BROWNOUT) && !reset_by_programmer;
   int in_air = bmp_ok && ground_pa > 0.0 && ground_pa < log_last.ground_pa - 1000.0;  /* ~90 m up */
   if (!unplanned && !in_air)
   {
-    return;  /* power-on or reset button on the ground: a new start */
+    printf("FLIGHT: log ended in %s, but this is a normal start%s: new flight from PRELAUNCH\r\n",
+           FS_NAME[log_last.frame.state], reset_by_programmer ? " (programmer)" : "");
+    return;  /* power-on, reset button or the programmer, on the ground: a new start */
   }
   ground_pa = log_last.ground_pa;
   asl_offset = log_last.asl_offset;
   asl_src = log_last.frame.asl_src;
   FlightSmResume(&fsm, HAL_GetTick(), (FlightState)log_last.frame.state, log_last.max_alt);
+  if (log_last.frame.valid & FRAME_TEST)
+  {
+    test_mode = 1;
+    fsm.scale = TEST_SCALE;
+    fsm.landed_max = TEST_LANDED_MAX;
+    printf("FLIGHT: (lift test mode)\r\n");
+  }
   printf("FLIGHT: resumed %s after a %s reset, launch pressure ", FS_NAME[fsm.state],
          ResetCauseName(reset_cause));
   PrintFixed2(ground_pa);
@@ -1902,6 +1921,9 @@ int main(void)
   /* The programmer (st-flash) sets "halt on reset" in the debug unit. That register
      survives every reset except power-off, so a watchdog reset would stop the core
      instead of restarting the program. Clear it: no programmer is attached in flight. */
+  /* The same bit tells that this boot comes from the programmer: its reset looks like a
+     software reset, but it must not "continue a flight" on the bench. */
+  reset_by_programmer = (CoreDebug->DEMCR & CoreDebug_DEMCR_VC_CORERESET_Msk) != 0U;
   CoreDebug->DEMCR &= ~CoreDebug_DEMCR_VC_CORERESET_Msk;
   ResetCauseCapture();
   DelayUsInit();  /* cycle counter: microsecond delays and loop timing */
@@ -2014,6 +2036,35 @@ int main(void)
           printf("SIM: fake flight x40 - burst at 30 km after ~2.7 min, landing after ~4 min,"
                  " LANDED 1 min later. Press S again to stop.\r\n");
         }
+      }
+      else if (cmd == 'T' || cmd == 't')
+      {
+        if (test_mode)
+        {
+          test_mode = 0;
+          FlightSmInit(&fsm, HAL_GetTick());
+          BuzzerSet(0);
+          printf("TEST: lift mode off, back to PRELAUNCH\r\n");
+        }
+        else if (fsm.state != FS_PRELAUNCH || sim_active)
+        {
+          printf("TEST: refused, only in PRELAUNCH without S\r\n");
+        }
+        else
+        {
+          double t, p;
+          if (bmp_ok && BmpReadData(&t, &p) == 0)
+          {
+            ground_pa = p;  /* this floor is the "ground" of the lift flight */
+          }
+          test_mode = 1;
+          FlightSmInit(&fsm, HAL_GetTick());
+          fsm.scale = TEST_SCALE;
+          fsm.landed_max = TEST_LANDED_MAX;
+          printf("TEST: lift mode ON - launch above 15 m, descent 25 m below the top, landed only"
+                 " within 10 m of this floor (ground re-zeroed here)\r\n");
+        }
+        next_ms = HAL_GetTick() + FRAME_PERIOD_MS;
       }
       else if (cmd == 'Q' || cmd == 'q')
       {

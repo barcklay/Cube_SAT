@@ -57,6 +57,8 @@ typedef struct
   uint32_t hold_a_ms;  /* since when condition A holds (0 = not holding) */
   uint32_t hold_b_ms;  /* since when condition B holds */
   float still_min, still_max;  /* altitude range since the "not moving" watch started */
+  float scale;         /* altitude thresholds x scale: 1 = flight, 0.05 = lift test */
+  float landed_max;    /* landing counts only below this altitude above launch */
   uint32_t win_t[FS_WINDOW];
   float win_h[FS_WINDOW];
   int win_n, win_head;
@@ -92,6 +94,8 @@ static inline void FlightSmInit(FlightSm *sm, uint32_t now_ms)
   sm->vz_ok = 0;
   sm->hold_a_ms = sm->hold_b_ms = 0;
   sm->win_n = sm->win_head = 0;
+  sm->scale = 1.0f;
+  sm->landed_max = FS_LANDED_MAX_ALT_M;
 }
 
 /* After a reset in flight: continue from the state saved in the log. */
@@ -205,7 +209,7 @@ static inline int FlightSmUpdate(FlightSm *sm, uint32_t now_ms, float alt_m, int
   switch (sm->state)
   {
     case FS_PRELAUNCH:
-      if (FlightSmHeld(&sm->hold_a_ms, h > FS_LAUNCH_ALT_M && vz > FS_LAUNCH_VZ, now_ms, FS_LAUNCH_HOLD_MS))
+      if (FlightSmHeld(&sm->hold_a_ms, h > FS_LAUNCH_ALT_M * sm->scale && vz > FS_LAUNCH_VZ, now_ms, FS_LAUNCH_HOLD_MS))
       {
         FlightSmGo(sm, FS_ASCENT, now_ms);
         sm->max_alt = h;
@@ -218,14 +222,14 @@ static inline int FlightSmUpdate(FlightSm *sm, uint32_t now_ms, float alt_m, int
       {
         FlightSmGo(sm, FS_BURST, now_ms);           /* fast fall: the balloon burst */
       }
-      else if (h < sm->max_alt - FS_LEAK_DROP_M)
+      else if (h < sm->max_alt - FS_LEAK_DROP_M * sm->scale)
       {
         /* 500 m below the top: falling fast = burst, slowly = leak (no burst) */
         FlightSmGo(sm, vz < FS_BURST_VZ ? FS_BURST : FS_DESCENT, now_ms);
       }
       else if (sm->state == FS_ASCENT &&
-               h > FS_FLOAT_MIN_ALT_M &&
-               FlightSmStill(sm, &sm->hold_b_ms, h, vz, now_ms, FS_FLOAT_HOLD_MS, FS_FLOAT_RANGE_M))
+               h > FS_FLOAT_MIN_ALT_M * sm->scale &&
+               FlightSmStill(sm, &sm->hold_b_ms, h, vz, now_ms, FS_FLOAT_HOLD_MS, FS_FLOAT_RANGE_M * sm->scale))
       {
         FlightSmGo(sm, FS_FLOAT, now_ms);
       }
@@ -244,7 +248,7 @@ static inline int FlightSmUpdate(FlightSm *sm, uint32_t now_ms, float alt_m, int
       break;
 
     case FS_DESCENT:
-      if (h < FS_LANDED_MAX_ALT_M &&
+      if (h < sm->landed_max &&
           FlightSmStill(sm, &sm->hold_a_ms, h, vz, now_ms, FS_LANDED_HOLD_MS, FS_STILL_RANGE_M))
       {
         FlightSmGo(sm, FS_LANDED, now_ms);
