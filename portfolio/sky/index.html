@@ -51,7 +51,7 @@ pre b{color:var(--hab);font-weight:500}
 .glabel{position:absolute;left:0;top:0;transform:translate(-50%,-130%);font:500 11px/1.2 var(--mono);color:var(--txt);
   background:rgba(7,11,20,.72);border:1px solid var(--edge);border-radius:3px;padding:2px 6px;white-space:nowrap;pointer-events:none}
 .glabel.home{color:#1A0E08;background:var(--hab);border-color:var(--hab);font-weight:600}
-.gtip{position:absolute;right:12px;top:12px;max-width:300px;background:rgba(10,15,26,.9);border:1px solid var(--edge);border-radius:6px;
+.gtip{position:absolute;right:12px;top:12px;max-width:340px;background:rgba(10,15,26,.9);border:1px solid var(--edge);border-radius:6px;
   padding:12px 14px;display:grid;gap:4px;font-size:13px;pointer-events:none}
 .gtip b{font:600 14px var(--body)}
 .gtip span{color:var(--dim);font-family:var(--mono);font-size:12px}
@@ -81,6 +81,15 @@ a{color:var(--hab)}
     <div class="ghint">тянуть — вращать · колесо / щипок — масштаб · нажми на спутник, чтобы подлететь</div>
     <button class="gback" id="gback" hidden>← Вся картина</button>
   </div>
+</section>
+
+<section>
+  <h2>Что делают эти спутники</h2>
+  <div class="two">
+    <p>Навигационный спутник — это летающие часы. На каждом стоят атомные часы, и он без остановки передаёт: «сейчас ровно такое-то время, я нахожусь вот здесь». Приёмник на зонде замечает, насколько опоздал сигнал от каждого спутника, переводит опоздания в расстояния и по четырём и больше спутникам вычисляет, где он и который час.</p>
+    <p>Спутники SBAS (здесь — индийская система GAGAN) висят над одной точкой экватора и рассылают поправки к часам, орбитам и задержке сигнала в атмосфере. С ними ошибка координат падает до метра. Основная работа этих двух спутников — связь и телевидение, навигационная аппаратура на них — попутный груз.</p>
+  </div>
+  <p class="note">Спецификации: NAVCEN (статус GPS), GSC Europa (Galileo), список кодов PRN gps.gov (январь 2026), AAI (GAGAN), Wikipedia и eoPortal. Внешний вид моделей — по фото и рендерам производителей, упрощённо.</p>
 </section>
 
 <section>
@@ -294,28 +303,80 @@ function draw(){ drawSky(); drawBars(); }
   const foilMat=new THREE.MeshStandardMaterial({color:0xd6a64a,metalness:.9,roughness:.35});
   const whiteMat=new THREE.MeshStandardMaterial({color:0xe8e8e2,metalness:.2,roughness:.5});
   const boomMat=new THREE.MeshStandardMaterial({color:0x9aa2ab,metalness:.7,roughness:.4});
+  /* Real satellites behind each PRN (sources: NAVCEN, GSC Europa, gps.gov PRN list, AAI/GAGAN,
+     Wikipedia/eoPortal; items marked (?) in the notes are read from photos, not published specs). */
+  const TYPES={
+    IIR:{name:"GPS Block IIR",maker:"Lockheed Martin",body:[1.9,1.9,1.5],span:11.6,panels:2,skin:"gold",ant:"helix",mass:"2 030 кг",life:"7,5 лет",
+      signals:"L1 C/A, L1/L2 P(Y)",clock:"рубидиевые атомные часы"},
+    IIRM:{name:"GPS Block IIR-M",maker:"Lockheed Martin",body:[1.9,1.9,1.5],span:11.6,panels:2,skin:"gold",ant:"helix",mass:"2 030 кг",life:"7,5 лет",
+      signals:"L1 C/A, P(Y), L2C, военный M-код",clock:"рубидиевые атомные часы"},
+    IIF:{name:"GPS Block IIF",maker:"Boeing",body:[2.0,2.9,3.9],span:13.1,panels:3,skin:"goldblack",ant:"helix",mass:"1 633 кг",life:"12 лет",
+      signals:"L1 C/A, P(Y), L2C, M-код, первый гражданский L5",clock:"рубидиевые атомные часы"},
+    FOC:{name:"Galileo FOC",maker:"OHB (спутник), SSTL (навигационная аппаратура)",body:[2.7,1.2,1.1],span:14,panels:2,skin:"silver",ant:"plate",mass:"≈ 700 кг",life:"12 лет",
+      signals:"E1, E5a/b, E6; ретранслятор сигналов бедствия, лазерный отражатель",clock:"пассивный водородный мазер"},
+    BD2I:{name:"BeiDou-2, наклонная геосинхронная (IGSO)",maker:"CAST, платформа DFH-3",body:[1.7,2.0,2.2],span:17,panels:3,skin:"gold",ant:"phased",mass:"≈ 2,2 т (?)",life:"8 лет",
+      signals:"B1I, B2I, B3I",clock:"рубидиевые атомные часы"},
+    GSAT:{name:"ISRO GSAT (платформа I-3K) с аппаратурой GAGAN",maker:"ISRO",body:[2.0,1.8,3.1],span:20,panels:4,skin:"gold",ant:"geo",mass:"",life:"",
+      signals:"спутник связи (Ku/C-диапазон) + поправки GAGAN на L1/L5",clock:"точное время берёт с наземных станций"},
+  };
+  const SAT={
+    "GPS-2":{t:"IIR",id:"SVN 61 (USA-180)",launch:"6 ноября 2004"},
+    "GPS-3":{t:"IIF",id:"SVN 69",launch:"29 октября 2014"},
+    "GPS-6":{t:"IIF",id:"SVN 67",launch:"17 мая 2014"},
+    "GPS-7":{t:"IIRM",id:"SVN 48",launch:"15 марта 2008"},
+    "GPS-9":{t:"IIF",id:"SVN 68",launch:"2 августа 2014"},
+    "GPS-30":{t:"IIF",id:"SVN 64",launch:"21 февраля 2014"},
+    "Galileo-29":{t:"FOC",id:"GSAT0225 «Patrick»",launch:"28 апреля 2024"},
+    "BeiDou-6":{t:"BD2I",id:"Compass-IGSO1",launch:"31 июля 2010",note:"давно отслужил расчётные 8 лет, но всё ещё передаёт"},
+    "BeiDou-9":{t:"BD2I",id:"Compass-IGSO4",launch:"26 июля 2011",note:"давно отслужил расчётные 8 лет, но всё ещё передаёт"},
+    "SBAS-40":{t:"GSAT",id:"GSAT-8 (PRN 127), над 55° в. д.",launch:"21 мая 2011",mass:"3 093 кг",life:"12 лет",note:"индийская система GAGAN: поправки для авиации"},
+    "SBAS-41":{t:"GSAT",id:"GSAT-10 (PRN 128), над 83° в. д.",launch:"29 сентября 2012",mass:"3 435 кг",life:"15 лет",note:"индийская система GAGAN: поправки для авиации"},
+  };
+  const infoOf=s=>{ const e=SAT[s.sys+"-"+s.prn]; return e?{...TYPES[e.t],...e,mass:e.mass||TYPES[e.t].mass,life:e.life||TYPES[e.t].life}:null; };
+
+  const M2U=.07;   // 1 metre = 0.07 scene units (Earth radius = 1): hundreds of thousands of times larger than life
+  const skinMat={gold:foilMat,
+    goldblack:foilMat,
+    silver:new THREE.MeshStandardMaterial({color:0xc4c8ce,metalness:.85,roughness:.3})};
+  const blackMLI=new THREE.MeshStandardMaterial({color:0x17181b,metalness:.3,roughness:.6});
+  const radMat=new THREE.MeshStandardMaterial({color:0xeef0f2,metalness:.1,roughness:.4});
   function makeSat(s){
-    const geo=orbitKm(s)===42164, g=new THREE.Group(), k=geo?1.25:1;
-    const body=new THREE.Mesh(new THREE.BoxGeometry(.11*k,.11*k,.14*k),foilMat); g.add(body);
-    const wingL=geo?.62:.42;
-    [-1,1].forEach(side=>{
-      const boom=new THREE.Mesh(new THREE.CylinderGeometry(.006,.006,.08,6),boomMat);
-      boom.rotation.z=Math.PI/2; boom.position.x=side*(.055*k+.04); g.add(boom);
-      const wing=new THREE.Mesh(new THREE.BoxGeometry(wingL,.004,.13*k),panelMat);
-      wing.position.x=side*(.055*k+.08+wingL/2); wing.userData.wing=true; g.add(wing);
+    const info=infoOf(s)||TYPES.IIF, [bx,by,bz]=info.body.map(v=>v*M2U), g=new THREE.Group();
+    // body: x = wing axis, z = towards the Earth (the model's -Z face carries the antennas)
+    const body=new THREE.Mesh(new THREE.BoxGeometry(bx,by,bz),skinMat[info.skin]); g.add(body);
+    if(info.skin==="goldblack"){ const band=new THREE.Mesh(new THREE.BoxGeometry(bx*1.01,by*1.01,bz*.35),blackMLI); band.position.z=bz*.2; g.add(band); }
+    // white radiator panels on the faces that never see the Sun (±Y)
+    [-1,1].forEach(sd=>{ const r=new THREE.Mesh(new THREE.BoxGeometry(bx*.8,.002,bz*.7),radMat); r.position.y=sd*(by/2+.001); g.add(r); });
+    // solar wings: boom + N panels with gaps
+    const wingLen=(info.span*M2U-bx)/2-.02, pw=(wingLen-.02)/info.panels, ph=Math.min(bz*.95,wingLen*.36);
+    [-1,1].forEach(sd=>{
+      const boom=new THREE.Mesh(new THREE.CylinderGeometry(.004,.004,.04,6),boomMat); boom.rotation.z=Math.PI/2; boom.position.x=sd*(bx/2+.02); g.add(boom);
+      const wing=new THREE.Group(); wing.userData.wing=true; wing.position.x=sd*(bx/2+.04); g.add(wing);
+      for(let i=0;i<info.panels;i++){ const pnl=new THREE.Mesh(new THREE.BoxGeometry(pw*.96,.003,ph),panelMat); pnl.position.x=sd*(pw*(i+.5)); wing.add(pnl); }
     });
-    // antenna panel on the Earth side (-Z of the model), a dish on geostationary ones
-    const ant=new THREE.Mesh(new THREE.BoxGeometry(.08*k,.08*k,.01),whiteMat); ant.position.z=-.075*k; g.add(ant);
-    if(geo){ const dish=new THREE.Mesh(new THREE.SphereGeometry(.06,20,10,0,6.283,0,1.1),whiteMat); dish.rotation.x=Math.PI/2; dish.position.set(.03,.04,-.1); g.add(dish); }
-    // attitude: -Z (antennas) to the Earth, wings along the axis perpendicular to the Sun and nadir
+    const face=-bz/2-.001;
+    if(info.ant==="helix"){ // GPS: a ring of ~12 short white helix antennas on the Earth face
+      const hm=new THREE.MeshStandardMaterial({color:0xf2f2ee,roughness:.5});
+      const plate=new THREE.Mesh(new THREE.CylinderGeometry(Math.min(bx,by)*.45,Math.min(bx,by)*.45,.004,24),blackMLI); plate.rotation.x=Math.PI/2; plate.position.z=face; g.add(plate);
+      [[4,.14],[8,.34]].forEach(([n,rf])=>{ for(let i=0;i<n;i++){ const a=i/n*6.283+(n===8?.2:0), r=Math.min(bx,by)*rf;
+        const h=new THREE.Mesh(new THREE.CylinderGeometry(.006,.009,.04,8),hm); h.rotation.x=Math.PI/2; h.position.set(Math.cos(a)*r,Math.sin(a)*r,face-.02); g.add(h); } });
+    } else if(info.ant==="plate"||info.ant==="phased"){ // Galileo / BeiDou: large flat navigation antenna
+      const w=Math.min(bx,by)*.9; const a=new THREE.Mesh(new THREE.BoxGeometry(w,w,.01),info.ant==="plate"?radMat:new THREE.MeshStandardMaterial({color:0xd9d3c0,roughness:.6}));
+      a.position.z=face-.005; g.add(a);
+    } else if(info.ant==="geo"){ // GEO telecom: two big dish reflectors east and west, small GAGAN antenna on the Earth deck
+      const dm=new THREE.MeshStandardMaterial({color:0xf4f4f0,roughness:.45,side:THREE.DoubleSide});
+      [-1,1].forEach(sd=>{ const d=new THREE.Mesh(new THREE.SphereGeometry(2.1*M2U/2*1.4,24,10,0,6.283,0,.75),dm);
+        d.rotation.set(0,0,sd*Math.PI/2); d.rotateX(-.5); d.position.set(0,sd*(by/2+.06),-bz*.25); g.add(d); });
+      const cup=new THREE.Mesh(new THREE.CylinderGeometry(.02,.012,.03,12),new THREE.MeshStandardMaterial({color:0xf2f2ee})); cup.rotation.x=Math.PI/2; cup.position.z=face-.015; g.add(cup);
+    }
+    // attitude: -Z to the Earth, wings perpendicular to the Sun-nadir plane, panels turned to the Sun
     const nadir=s.pos.clone().normalize().negate();
     const wingAxis=new THREE.Vector3().crossVectors(nadir,SUN).normalize();
     const zAxis=nadir.clone().negate(), xAxis=wingAxis, yAxis=new THREE.Vector3().crossVectors(zAxis,xAxis);
     g.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(xAxis,yAxis,zAxis));
-    // turn the wings about their axis to face the Sun as well as they can
-    g.children.forEach(c=>{ if(c.userData.wing){ const sunLocal=SUN.clone().applyQuaternion(g.quaternion.clone().invert());
-      c.rotation.x=Math.atan2(sunLocal.z,sunLocal.y); } });
-    g.position.copy(s.pos); g.scale.setScalar(1.2); return g;
+    const sunLocal=SUN.clone().applyQuaternion(g.quaternion.clone().invert());
+    g.children.forEach(c=>{ if(c.userData.wing) c.rotation.x=Math.atan2(sunLocal.z,sunLocal.y); });
+    g.position.copy(s.pos); return g;
   }
   placed.forEach(s=>{
     const strong=Math.min(1,Math.max(.25,((s.snr||12)-10)/30));
@@ -334,11 +395,15 @@ function draw(){ drawSky(); drawBars(); }
 
   // hover / tap: what this satellite is and how far away
   const tip=document.getElementById("gtip");
-  const describe=s=>`<b style="color:${COL[s.sys]}">${s.sys} ${s.prn}</b>`+
-    `<span>${orbitName(s)}, ${nf(Math.round(s.alt/100)*100)} км над Землёй</span>`+
+  const describe=s=>{ const i=infoOf(s);
+    const head=`<b style="color:${COL[s.sys]}">${s.sys} ${s.prn}${i?" · "+i.name:""}</b>`;
+    const spec=i?`<span>${i.id} · запущен ${i.launch} · ${i.maker}</span>`+
+      `<span>${[i.mass&&"масса "+i.mass, i.span&&"размах панелей ≈ "+nf(i.span,1).replace(",0","")+" м", i.life&&"рассчитан на "+i.life].filter(Boolean).join(" · ")}</span>`+
+      `<span>передаёт: ${i.signals}; ${i.clock}</span>`+(i.note?`<span style="color:#FFB48A">${i.note}</span>`:""):"";
+    return head+spec+`<span>${orbitName(s)}, ${nf(Math.round(s.alt/100)*100)} км над Землёй</span>`+
     `<span>до Бангкока ${nf(Math.round(s.range/100)*100)} км · сигнал в пути ${nf(s.range/299792,3)} с</span>`+
     `<span>${s.snr!=null?`сигнал ${nf(s.snr,0)} дБ·Гц — ${s.snr>=35?"сильный":s.snr>=25?"нормальный":"слабый"}`:"сигнал в записи не пойман"}</span>`+
-    `<span>над горизонтом ${s.el}°, направление ${s.az}°</span>`;
+    `<span>над горизонтом ${s.el}°, направление ${s.az}°</span>`; };
   const best=placed.slice().sort((a,b)=>(b.snr||0)-(a.snr||0))[0];
   const setTip=s=>{ tip.innerHTML=describe(s); };
   setTip(best);
