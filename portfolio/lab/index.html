@@ -131,12 +131,19 @@ button[aria-pressed="true"]{background:var(--txt);color:#0A0E14;border-color:var
 @media (max-width:820px){
   .hud{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr) auto auto;padding-inline:16px;gap:10px}
   .brand h1{font-size:20px}.brand p{display:none}
+  .top{flex-direction:column;align-items:stretch;gap:10px}
+  .views{justify-content:flex-start}
+  .views button{padding:8px 10px}
+  .clock{display:none}
+  .tl-row{gap:10px}
+  .hud>*{min-width:0}
   .right{grid-column:1;grid-row:2;align-self:start;max-height:46vh}
-  .right.collapsed .card:not(:first-child){display:none}
+  .right.collapsed .card{display:none}
   .left{grid-column:1;grid-row:3}
-  .sens-toggle{display:inline-block}
+  .sens-toggle{display:inline-block;justify-self:end}
   .opts{gap:8px}
-  .mark{font-size:9px}
+  .mark{font-size:0;padding:0}
+  .mark::after{top:4px;height:10px}
 }
 @media (prefers-reduced-motion: reduce){.bar i{animation:none}.splash{transition:none}}
 </style>
@@ -167,11 +174,9 @@ button[aria-pressed="true"]{background:var(--txt);color:#0A0E14;border-color:var
   </div>
 
   <aside class="right" id="right">
+    <button class="sens-toggle" id="sens-toggle" aria-expanded="true">Датчики ▴</button>
     <div class="glass card">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
-        <span class="lbl">Датчики на борту</span>
-        <button class="sens-toggle" id="sens-toggle" aria-expanded="false">Показать</button>
-      </div>
+      <span class="lbl">Датчики на борту</span>
       <div class="sens" id="sens"></div>
     </div>
     <div class="glass card">
@@ -202,8 +207,6 @@ button[aria-pressed="true"]{background:var(--txt);color:#0A0E14;border-color:var
       <span class="clock" id="clock"></span>
     </div>
     <div class="opts">
-      <div class="seg" role="group" aria-label="Атмосфера"><span class="lbl">Атмосфера</span>
-        <button id="atm-trop" aria-pressed="true">Тропики</button><button id="atm-isa" aria-pressed="false">Стандартная ISA</button></div>
       <div class="seg" role="group" aria-label="Режим GPS"><span class="lbl">GPS</span>
         <button id="gps-air" aria-pressed="true">Airborne &lt;4g</button><button id="gps-port" aria-pressed="false">Portable</button></div>
     </div>
@@ -239,7 +242,7 @@ button[aria-pressed="true"]{background:var(--txt);color:#0A0E14;border-color:var
   </ul>
   <h3>Модель</h3>
   <ul>
-    <li>Два профиля атмосферы. Стандартная ISA и упрощённые тропики: +27 °C у земли, около −83 °C на 17 км. Запуск планируется в тропиках, поэтому по умолчанию включены они.</li>
+    <li>Атмосфера — упрощённый тропический профиль: +27 °C у земли, около −83 °C на 17 км. Он холоднее стандартной ISA, потому что запуск будет в Таиланде.</li>
     <li>Подъём 5 м/с. Шар 1,9 м у земли и лопается при 7,9 м, газ считается при температуре воздуха. Высота разрыва получается из этого расчёта.</li>
     <li>Спуск на парашюте: 5 м/с у земли, на высоте быстрее пропорционально √(ρ₀/ρ).</li>
     <li>Температура внутри бокса — грубая оценка. Её заменят данные теста с сухим льдом (HW-34).</li>
@@ -624,13 +627,13 @@ const playBtn=$("play");
 function stop(){playing=false;playBtn.setAttribute("aria-pressed","false");playBtn.textContent="▶ Полёт";}
 playBtn.onclick=()=>{ if(playing){stop();return;} if(+tIn.value>=M.TEND-1) tIn.value=-PRE; playing=true; playBtn.setAttribute("aria-pressed","true"); playBtn.textContent="❚❚ Пауза"; };
 tIn.addEventListener("input",stop);
-function setAtm(k){ const f=frac(); M=buildModel(k); $("atm-trop").setAttribute("aria-pressed",k==="trop"); $("atm-isa").setAttribute("aria-pressed",k==="isa"); setRange(f); }
-$("atm-trop").onclick=()=>setAtm("trop"); $("atm-isa").onclick=()=>setAtm("isa");
 function setGps(a){gpsAirborne=a;$("gps-air").setAttribute("aria-pressed",a);$("gps-port").setAttribute("aria-pressed",!a);}
 $("gps-air").onclick=()=>setGps(true); $("gps-port").onclick=()=>setGps(false);
 $("about-btn").onclick=()=>{$("about").hidden=false;}; $("about-close").onclick=()=>{$("about").hidden=true;};
-$("sens-toggle").onclick=e=>{const r=$("right"),open=r.classList.toggle("collapsed");e.target.textContent=open?"Показать":"Скрыть";e.target.setAttribute("aria-expanded",!open);};
-if(innerWidth<=820) $("right").classList.add("collapsed");
+function setSensors(show){ const r=$("right"),b=$("sens-toggle"); r.classList.toggle("collapsed",!show);
+  b.textContent=show?"Датчики ▴":"Датчики ▾"; b.setAttribute("aria-expanded",show); }
+$("sens-toggle").onclick=()=>setSensors($("right").classList.contains("collapsed"));
+if(innerWidth<=820) setSensors(false);
 addEventListener("keydown",e=>{ if(e.target.tagName==="INPUT"&&e.key!==" ") return;
   if(e.key===" "){e.preventDefault();playBtn.click();} if(e.key==="Escape") $("about").hidden=true; });
 
