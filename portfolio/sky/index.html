@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Небо над HAB-1</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* A night-sky page on purpose: one dark look, all colours set explicitly. */
+:root{
+  color-scheme:dark;
+  --bg:#070B14; --panel:#0E1522; --edge:#1F2A3A; --txt:#E6ECF3; --dim:#8E9DB0; --faint:#56657A;
+  --hab:#FF6B2C; --gps:#4FA3FF; --gal:#7BD389; --bds:#FF8A4C; --sbas:#C6A4FF;
+  --display:"Unbounded","Arial Black",system-ui,sans-serif;
+  --body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.55 var(--body);padding-inline:16px;padding-block:0 48px}
+.wrap{max-width:1100px;margin:0 auto}
+header{display:grid;gap:12px;padding-block:40px 28px}
+.eyebrow{font:500 11px/1.3 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+h1{margin:0;font:700 clamp(28px,5vw,46px)/1.05 var(--display);text-wrap:balance}
+h1 b{color:var(--hab);font-weight:700}
+h2{margin:0;font:500 20px/1.2 var(--display);text-wrap:balance}
+.lede{margin:0;max-width:64ch;color:var(--dim);font-size:16px}
+section{display:grid;gap:16px;padding-block:28px;border-top:1px solid var(--edge)}
+.grid{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:24px;align-items:start}
+@media (max-width:820px){.grid{grid-template-columns:minmax(0,1fr)}}
+.plot{position:relative;width:100%;max-width:560px;aspect-ratio:1;justify-self:center}
+.plot canvas{width:100%;height:100%;display:block}
+.stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--edge);border:1px solid var(--edge);border-radius:6px;overflow:hidden}
+.stat{background:var(--panel);padding:12px 14px;display:grid;gap:2px}
+.stat .k{font:500 10px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
+.stat .v{font:500 24px/1.15 var(--mono);font-variant-numeric:tabular-nums}
+.stat .s{font-size:12px;color:var(--faint)}
+.legend{display:flex;flex-wrap:wrap;gap:8px 16px;font:12px var(--mono);color:var(--dim)}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:-1px}
+p{margin:0;max-width:66ch}
+.note{color:var(--dim);font-size:14px}
+.bars{overflow-x:auto}
+.bars svg{display:block;min-width:640px;width:100%}
+pre{margin:0;background:#04070D;border:1px solid var(--edge);border-radius:6px;padding:12px 14px;font:12.5px/1.6 var(--mono);color:#9FE8B8;overflow-x:auto}
+pre b{color:var(--hab);font-weight:500}
+.two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px}
+@media (max-width:820px){.two{grid-template-columns:minmax(0,1fr)}}
+footer{padding-block:24px;border-top:1px solid var(--edge);font:12px var(--mono);color:var(--faint)}
+a{color:var(--hab)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <p class="eyebrow">HAB-1 · GPS u-blox MAX-M10S · запись 29.09.2026, 21:44 · Бангкок, у окна</p>
+  <h1>Небо, которое видит <b>GPS</b></h1>
+  <p class="lede">Три минуты настоящих данных с модуля GPS моего зонда. Каждая точка — спутник: где он на небе, какой системы и насколько сильный сигнал до него доходит. Координаты не публикуются.</p>
+</header>
+
+<section>
+  <div class="grid">
+    <div class="plot"><canvas id="sky" aria-label="Карта неба: спутники по направлению и высоте над горизонтом"></canvas></div>
+    <div style="display:grid;gap:16px">
+      <div class="stats" id="stats"></div>
+      <div class="legend" id="legend"></div>
+      <p class="note">Как читать карту: центр — зенит, прямо над головой; край — горизонт. Север сверху, восток справа. Чем крупнее и ярче точка, тем сильнее сигнал.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Почему пока нет координат</h2>
+  <div class="two">
+    <p>Все хорошо слышные спутники стоят в <b>южной и западной</b> половине неба, от 110° до 270°. Это и есть окно: северную половину закрывает дом, а спутник прямо над головой (GPS 30) почти не слышно из-за потолка. Приёмник слышит 32 спутника, но положение знает только у 11, и все они с одной стороны. По спутникам с одной стороны точку не вычислить.</p>
+    <p>Отсюда первое правило запуска: <b>антенне GPS нужно всё небо</b>. В полёте над зондом ничего нет, а вот на земле перед стартом его надо включать на открытом месте и ждать фикса, а не в машине или под навесом. Именно так карта неба помогает проверить аппарат до полёта.</p>
+  </div>
+</section>
+
+<section>
+  <h2>Сила сигнала каждого спутника</h2>
+  <p class="note">Среднее отношение сигнал/шум (C/N0) за три минуты, в дБ·Гц; штрих — лучшее значение. Ниже ~25 сигнал слабый, от 35 — сильный.</p>
+  <div class="bars" id="bars"></div>
+</section>
+
+<section>
+  <h2>Режим Airborne &lt;4g: без него GPS слепнет на высоте</h2>
+  <div class="two">
+    <p>По умолчанию модуль считает, что его носят в руке или везут в машине, и выше 12 км перестаёт выдавать координаты. Зонд летит на 30 км. Поэтому прошивка при каждом включении переводит модуль в режим «летательный аппарат» (Airborne &lt;4g, потолок 80 км), ждёт подтверждения и сохраняет режим в память модуля с батарейкой. Так выглядит это в настоящем логе при старте платы:</p>
+    <pre>GPS: NMEA OK at 38400 baud
+GPS dynModel at boot: RAM=<b>8</b> (AIRBORNE&lt;4g), BBR=<b>8</b> (AIRBORNE&lt;4g)
+GPS set Airborne&lt;4g: <b>ACK</b>
+GPS dynModel now: RAM=<b>8</b> (AIRBORNE&lt;4g)</pre>
+  </div>
+</section>
+
+<footer>HAB-1 · данные: сырые NMEA-строки GSV модуля MAX-M10S, 185 секунд · проект: <a href="https://github.com/barcklay/Cube_SAT">github.com/barcklay/Cube_SAT</a> · полёт в 3D: <a href="https://claude.ai/artifact/VP8YPhxGNXckYP5Keu93rK">HAB-1 Лаборатория</a></footer>
+</div>
+
+<script>
+"use strict";
+const SATS=[{"sys":"SBAS","prn":41,"el":64,"az":233,"snr":41.0,"snrMax":42,"secs":185},{"sys":"GPS","prn":6,"el":27,"az":209,"snr":37.2,"snrMax":39,"secs":185},{"sys":"GPS","prn":9,"el":8,"az":176,"snr":35.0,"snrMax":38,"secs":185},{"sys":"BeiDou","prn":6,"el":19,"az":149,"snr":32.4,"snrMax":35,"secs":185},{"sys":"Galileo","prn":29,"el":20,"az":190,"snr":31.6,"snrMax":33,"secs":28},{"sys":"GPS","prn":7,"el":56,"az":172,"snr":30.0,"snrMax":33,"secs":185},{"sys":"BeiDou","prn":2,"el":null,"az":null,"snr":29.4,"snrMax":31,"secs":185},{"sys":"BeiDou","prn":12,"el":null,"az":null,"snr":26.0,"snrMax":26,"secs":1},{"sys":"BeiDou","prn":49,"el":null,"az":null,"snr":24.5,"snrMax":25,"secs":2},{"sys":"BeiDou","prn":16,"el":null,"az":null,"snr":24.0,"snrMax":28,"secs":3},{"sys":"BeiDou","prn":9,"el":12,"az":172,"snr":23.7,"snrMax":32,"secs":148},{"sys":"BeiDou","prn":40,"el":null,"az":null,"snr":23.5,"snrMax":26,"secs":2},{"sys":"BeiDou","prn":22,"el":null,"az":null,"snr":21.0,"snrMax":26,"secs":4},{"sys":"BeiDou","prn":18,"el":null,"az":null,"snr":20.0,"snrMax":27,"secs":3},{"sys":"BeiDou","prn":47,"el":null,"az":null,"snr":20.0,"snrMax":20,"secs":1},{"sys":"BeiDou","prn":24,"el":null,"az":null,"snr":19.7,"snrMax":22,"secs":3},{"sys":"BeiDou","prn":28,"el":null,"az":null,"snr":19.5,"snrMax":20,"secs":2},{"sys":"BeiDou","prn":55,"el":null,"az":null,"snr":19.5,"snrMax":23,"secs":2},{"sys":"BeiDou","prn":19,"el":null,"az":null,"snr":19.0,"snrMax":21,"secs":2},{"sys":"BeiDou","prn":25,"el":null,"az":null,"snr":19.0,"snrMax":19,"secs":1},{"sys":"BeiDou","prn":53,"el":null,"az":null,"snr":18.0,"snrMax":18,"secs":1},{"sys":"GPS","prn":3,"el":22,"az":109,"snr":17.2,"snrMax":23,"secs":135},{"sys":"BeiDou","prn":51,"el":null,"az":null,"snr":17.0,"snrMax":19,"secs":2},{"sys":"GPS","prn":30,"el":70,"az":270,"snr":16.6,"snrMax":21,"secs":76},{"sys":"BeiDou","prn":13,"el":null,"az":null,"snr":16.0,"snrMax":16,"secs":1},{"sys":"BeiDou","prn":14,"el":null,"az":null,"snr":16.0,"snrMax":16,"secs":1},{"sys":"BeiDou","prn":20,"el":null,"az":null,"snr":15.8,"snrMax":18,"secs":4},{"sys":"BeiDou","prn":21,"el":null,"az":null,"snr":15.0,"snrMax":15,"secs":1},{"sys":"BeiDou","prn":8,"el":null,"az":null,"snr":14.0,"snrMax":14,"secs":1},{"sys":"BeiDou","prn":15,"el":null,"az":null,"snr":14.0,"snrMax":14,"secs":1},{"sys":"GPS","prn":2,"el":13,"az":36,"snr":10.4,"snrMax":15,"secs":14},{"sys":"SBAS","prn":40,"el":36,"az":256,"snr":null,"snrMax":null,"secs":0}];
+const COL={GPS:"#4FA3FF",Galileo:"#7BD389",BeiDou:"#FF8A4C",SBAS:"#C6A4FF",GLONASS:"#F5B942"};
+const nf=(x,d=0)=>x.toLocaleString("ru-RU",{minimumFractionDigits:d,maximumFractionDigits:d});
+
+/* stats + legend */
+const heard=SATS.length, placed=SATS.filter(s=>s.el!=null).length, strong=SATS.filter(s=>(s.snr||0)>=30).length;
+const best=SATS.reduce((a,s)=>(s.snrMax||0)>(a.snrMax||0)?s:a,SATS[0]);
+const bySys={}; SATS.forEach(s=>bySys[s.sys]=(bySys[s.sys]||0)+1);
+document.getElementById("stats").innerHTML=[
+  ["Спутников слышно",heard,"за 3 минуты"],
+  ["С известным положением",placed,"точки на карте"],
+  ["Сильный сигнал",strong,"≥ 30 дБ·Гц"],
+  ["Лучший сигнал",best.snrMax+" дБ·Гц",best.sys+" "+best.prn],
+].map(([k,v,s])=>`<div class="stat"><span class="k">${k}</span><span class="v">${v}</span><span class="s">${s}</span></div>`).join("");
+document.getElementById("legend").innerHTML=Object.entries(bySys).map(([k,n])=>`<span><i style="background:${COL[k]}"></i>${k} · ${n}</span>`).join("");
+
+/* sky plot */
+const cv=document.getElementById("sky"), cx=cv.getContext("2d");
+function drawSky(){
+  const r=cv.getBoundingClientRect(), dpr=Math.min(devicePixelRatio,2);
+  cv.width=Math.round(r.width*dpr); cv.height=Math.round(r.height*dpr); cx.setTransform(dpr,0,0,dpr,0,0);
+  const W=r.width, C=W/2, R=W/2-34;
+  const P=(el,az)=>{ const rr=(90-el)/90*R, a=az*Math.PI/180; return [C+rr*Math.sin(a), C-rr*Math.cos(a)]; };
+  const g=cx.createRadialGradient(C,C,0,C,C,R); g.addColorStop(0,"#16233B"); g.addColorStop(1,"#0A1120");
+  cx.fillStyle=g; cx.beginPath(); cx.arc(C,C,R,0,7); cx.fill();
+  // the window: the sector where satellites were heard well
+  cx.fillStyle="rgba(255,107,44,.07)"; cx.beginPath(); cx.moveTo(C,C);
+  cx.arc(C,C,R,(110-90)*Math.PI/180,(270-90)*Math.PI/180); cx.closePath(); cx.fill();
+  cx.strokeStyle="#22314A"; cx.lineWidth=1;
+  [0,30,60].forEach(el=>{ cx.beginPath(); cx.arc(C,C,(90-el)/90*R,0,7); cx.stroke(); });
+  for(let az=0;az<360;az+=30){ const [x,y]=P(0,az); cx.beginPath(); cx.moveTo(C,C); cx.lineTo(x,y); cx.stroke(); }
+  cx.font="11px 'JetBrains Mono', monospace"; cx.fillStyle="#56657A"; cx.textAlign="left"; cx.textBaseline="middle";
+  [30,60].forEach(el=>cx.fillText(el+"°",C+4,C-(90-el)/90*R+8));
+  cx.fillStyle="#8E9DB0"; cx.font="600 12px 'JetBrains Mono', monospace"; cx.textAlign="center";
+  [["С",0],["В",90],["Ю",180],["З",270]].forEach(([t,az])=>{ const rr=R+16, a=az*Math.PI/180; cx.fillText(t,C+rr*Math.sin(a),C-rr*Math.cos(a)); });
+  cx.fillStyle="rgba(255,107,44,.75)"; cx.font="11px 'IBM Plex Sans', sans-serif";
+  const [wx,wy]=P(8,190); cx.fillText("окно",wx,wy+18);
+  cx.fillStyle="rgba(142,157,176,.6)"; const [hx,hy]=P(42,330); cx.fillText("дом закрывает",hx,hy);
+  // satellites
+  SATS.filter(s=>s.el!=null).forEach(s=>{
+    const [x,y]=P(s.el,s.az), snr=s.snr||0, rad=4+Math.max(0,snr-10)*0.28, col=COL[s.sys];
+    cx.globalAlpha=snr?0.25+Math.min(1,snr/42)*0.75:0.25;
+    cx.fillStyle=col; cx.beginPath(); cx.arc(x,y,rad,0,7); cx.fill();
+    if(snr>=30){ cx.globalAlpha=.25; cx.beginPath(); cx.arc(x,y,rad+5,0,7); cx.fill(); }
+    cx.globalAlpha=1; cx.fillStyle="#E6ECF3"; cx.font="10px 'JetBrains Mono', monospace"; cx.textAlign="left";
+    cx.fillText((s.sys==="BeiDou"?"C":s.sys==="Galileo"?"E":s.sys==="SBAS"?"S":"G")+s.prn,x+rad+3,y-2);
+  });
+}
+
+/* signal bars (SVG) */
+function drawBars(){
+  const list=SATS.filter(s=>s.snr!=null), W=Math.max(640,document.getElementById("bars").clientWidth), H=250;
+  const L=36,Rm=8,T=10,B=44, pw=W-L-Rm, ph=H-T-B, bw=pw/list.length, Y=v=>T+ph*(1-v/50);
+  let svg=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Сила сигнала по спутникам">`;
+  [0,10,20,30,40,50].forEach(v=>{ svg+=`<line x1="${L}" x2="${W-Rm}" y1="${Y(v)}" y2="${Y(v)}" stroke="#1F2A3A"/><text x="${L-6}" y="${Y(v)+4}" fill="#56657A" font-family="JetBrains Mono, monospace" font-size="10" text-anchor="end">${v}</text>`; });
+  list.forEach((s,i)=>{ const x=L+i*bw+bw*.15, w=bw*.7, col=COL[s.sys];
+    svg+=`<rect x="${x}" y="${Y(s.snr)}" width="${w}" height="${Y(0)-Y(s.snr)}" fill="${col}" opacity="${s.el!=null?1:.55}" rx="1.5"><title>${s.sys} ${s.prn}: ${nf(s.snr,1)} дБ·Гц (лучший ${s.snrMax})</title></rect>`;
+    svg+=`<line x1="${x}" x2="${x+w}" y1="${Y(s.snrMax)}" y2="${Y(s.snrMax)}" stroke="${col}" stroke-width="2"/>`;
+    svg+=`<text x="${x+w/2}" y="${H-B+14}" fill="#8E9DB0" font-family="JetBrains Mono, monospace" font-size="9.5" text-anchor="middle">${(s.sys==="BeiDou"?"C":s.sys==="Galileo"?"E":s.sys==="SBAS"?"S":"G")+s.prn}</text>`; });
+  svg+=`<text x="${L}" y="${H-8}" fill="#56657A" font-family="IBM Plex Sans, sans-serif" font-size="11">Бледные столбики — спутники, чьё положение приёмник ещё не знает (слышит сигнал, но нет альманаха)</text></svg>`;
+  document.getElementById("bars").innerHTML=svg;
+}
+function draw(){ drawSky(); drawBars(); }
+new ResizeObserver(draw).observe(document.querySelector(".plot"));
+if(document.fonts) document.fonts.ready.then(draw);
+draw();
+</script>
+
+</body>
+</html>
