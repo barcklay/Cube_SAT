@@ -209,10 +209,6 @@ button[aria-pressed="true"]{background:var(--txt);color:#0A0E14;border-color:var
       </div>
       <span class="clock" id="clock"></span>
     </div>
-    <div class="opts">
-      <div class="seg" role="group" aria-label="Режим GPS"><span class="lbl">GPS</span>
-        <button id="gps-air" aria-pressed="true">Airborne &lt;4g</button><button id="gps-port" aria-pressed="false">Portable</button></div>
-    </div>
     <div class="frm" id="frm" title="Строка кадра в формате FramePrint прошивки, значения из модели"></div>
   </div>
 </div>
@@ -240,7 +236,8 @@ button[aria-pressed="true"]{background:var(--txt);color:#0A0E14;border-color:var
     <li>Плата внутри зонда выгружена из KiCad-проекта полётной платы (<code>kicad-cli pcb export glb</code>). Детали расставлены, дорожки ещё не разведены.</li>
     <li>Высота по давлению считается формулой из прошивки: <code>44330·(1 − (p/p₀)^(1/5,255))</code>. Она верна только до 11 км, и страница показывает, насколько она ошибается выше.</li>
     <li>Строка внизу экрана в формате <code>FramePrint</code>: те же поля, флаги <code>valid</code> и код режима GPS, что в прошивке <code>hab_bringup</code>.</li>
-    <li>Паспортные пределы: BMP390 работает от 300 до 1250 гПа, DS18B20 от −55 до +125 °C, u-blox M10 в режиме Portable до 12 км, в Airborne &lt;4g до 80 км.</li>
+    <li>Паспортные пределы: BMP390 работает от 300 до 1250 гПа, DS18B20 от −55 до +125 °C.</li>
+    <li>GPS переведён в режим Airborne &lt;4g: в режиме по умолчанию приёмник перестаёт выдавать координаты выше 12 км, и зонд было бы не найти. Прошивка ставит режим при каждом включении и проверяет подтверждение модуля.</li>
     <li>Корпус по концепции HW-34: пенопласт XPS 30 мм, 250 × 175 × 140 мм, салазки с платой 1U, батареи 4× L91, отсек камеры.</li>
   </ul>
   <h3>Модель</h3>
@@ -643,8 +640,6 @@ const playBtn=$("play");
 function stop(){playing=false;playBtn.setAttribute("aria-pressed","false");playBtn.textContent="▶ Полёт";}
 playBtn.onclick=()=>{ if(playing){stop();return;} if(+tIn.value>=M.TEND-1) tIn.value=-PRE; playing=true; playBtn.setAttribute("aria-pressed","true"); playBtn.textContent="❚❚ Пауза"; };
 tIn.addEventListener("input",stop);
-function setGps(a){gpsAirborne=a;$("gps-air").setAttribute("aria-pressed",a);$("gps-port").setAttribute("aria-pressed",!a);}
-$("gps-air").onclick=()=>setGps(true); $("gps-port").onclick=()=>setGps(false);
 $("about-btn").onclick=()=>{$("about").hidden=false;}; $("about-close").onclick=()=>{$("about").hidden=true;};
 function setSensors(show){ const r=$("right"),b=$("sens-toggle"); r.classList.toggle("collapsed",!show);
   b.textContent=show?"Датчики ▴":"Датчики ▾"; b.setAttribute("aria-expanded",show); }
