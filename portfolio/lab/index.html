@@ -691,9 +691,16 @@ setTimeout(()=>{$("splash").classList.add("gone");},900);
 let seenInside=false;
 try{ seenInside=localStorage.getItem("hab1-seen-inside")==="1"; }catch(e){}
 function markInside(){ seenInside=true; $("hint3d").hidden=true; try{ localStorage.setItem("hab1-seen-inside","1"); }catch(e){} }
+/* "Look inside" is a toggle: the same button (or Esc) brings you back where you were. */
 const _setView=setView;
-setView=function(v){ _setView(v); if(v==="inside") markInside(); };
-$("v-inside").onclick=()=>setView("inside");
+let viewBeforeInside="probe";
+setView=function(v){
+  if(v!=="inside" || view!=="inside") { if(v==="inside") viewBeforeInside=view; _setView(v); }
+  if(v==="inside") markInside();
+  $("v-inside").textContent = view==="inside" ? "Выйти наружу" : "Заглянуть внутрь";
+};
+function toggleInside(){ setView(view==="inside" ? viewBeforeInside : "inside"); }
+$("v-inside").onclick=toggleInside;
 $("hint3d").onclick=()=>setView("inside");
 function closeIntro(){ $("intro").hidden=true; }
 $("intro-inside").onclick=()=>{ closeIntro(); setView("inside"); };
@@ -702,7 +709,8 @@ $("intro-close").onclick=closeIntro;
 let introSeen=false;
 try{ introSeen=localStorage.getItem("hab1-intro")==="1"; }catch(e){}
 if(!introSeen){ setTimeout(()=>{ $("intro").hidden=false; try{ localStorage.setItem("hab1-intro","1"); }catch(e){} },1000); }
-addEventListener("keydown",e=>{ if(e.key==="Escape") closeIntro(); });
+addEventListener("keydown",e=>{ if(e.key!=="Escape") return;
+  if(!$("intro").hidden) closeIntro(); else if(view==="inside" && $("about").hidden) toggleInside(); });
 /* the hint follows the box on screen while the box is in view */
 const hintPos=new THREE.Vector3();
 (function hintLoop(){
