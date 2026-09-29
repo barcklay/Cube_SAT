@@ -502,7 +502,12 @@ let boardReady=false;
 function loadBoard(){
   const js=document.createElement("script"); js.src="board.js";
   js.onload=()=>{ try{ const bin=atob(window.BOARD_GLB_B64),buf=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) buf[i]=bin.charCodeAt(i);
-    loader.parse(buf.buffer,"",g=>{ const b=g.scene; b.position.set(-.1479,0,-.1451); b.traverse(o=>{ if(o.isMesh){ o.material=o.material.clone(); } if(o.name&&/^[A-Z]{1,3}\d+$/.test(o.name)) o.userData.ref=o.name; });
+    loader.parse(buf.buffer,"",g=>{ const b=g.scene; b.position.set(-.1479,0,-.1451); b.traverse(o=>{ if(o.isMesh){ o.material=o.material.clone();
+        /* KiCad exports the default green solder mask: the board will be ordered red */
+        const c=o.material.color, near=(r,g,bl)=>c && Math.abs(c.r-r)<.03 && Math.abs(c.g-g)<.03 && Math.abs(c.b-bl)<.03;
+        if(o.material.opacity<1 && near(.08,.2,.14)){ c.setRGB(.5,.035,.025); o.material.opacity=.95; }   /* mask over copper: lighter red */
+        else if(near(.42,.45,.29)){ c.setRGB(.32,.018,.015); } }                                        /* board body under the mask */
+      if(o.name&&/^[A-Z]{1,3}\d+$/.test(o.name)) o.userData.ref=o.name; });
       boardGroup.add(b); boardReady=true; },()=>{}); }catch(e){} };
   document.head.appendChild(js);
 }
