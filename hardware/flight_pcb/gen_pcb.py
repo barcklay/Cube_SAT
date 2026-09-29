@@ -15,7 +15,8 @@ placed in functional zones, GND plane on In1 and +3V3 plane on In2, and outlines
 the plug-in module bodies on User.Drawings so nothing is placed under them by mistake.
 Tracks are NOT routed here.
 
-It refuses to overwrite a board that already has tracks (manual work).
+It refuses to overwrite a board that already has tracks, unless --force is given: the
+tracks from route_pcb.py are regenerated anyway (never use --force on hand routing).
 """
 
 import os
@@ -47,7 +48,8 @@ PLACE = {
     "U1": (48.0, 45.0, 0),
     "C5": (40.0, 37.0, 45), "C6": (56.0, 37.0, 135), "C7": (40.0, 53.0, 135), "C8": (56.0, 53.0, 45),
     "C9": (48.0, 36.0, 0), "C10": (48.0, 56.0, 0),
-    "FB1": (58.5, 41.0, 90), "C11": (60.5, 41.0, 90), "C12": (62.5, 41.0, 90),
+    # VDDA filter right under the VDDA pins 28/29 (bottom edge of U1)
+    "C12": (51.5, 56.5, 90), "C11": (53.5, 56.5, 90), "FB1": (55.5, 56.5, 90),
     # programming connector + reset at the bottom edge
     "J3": (48.0, 80.0, 0), "SW1": (63.0, 82.0, 0), "C13": (56.0, 76.0, 0),
     # pull-ups next to the MCU
@@ -110,11 +112,14 @@ def parse_netlist(path):
 
 
 def main():
-    if len(sys.argv) != 2:
+    force = "--force" in sys.argv
+    args = [a for a in sys.argv[1:] if a != "--force"]
+    if len(args) != 1:
         sys.exit(__doc__)
+    sys.argv[1:] = args
     if os.path.exists(OUT):
         old = pcbnew.LoadBoard(OUT)
-        if len(old.GetTracks()) > 0:
+        if len(old.GetTracks()) > 0 and not force:
             sys.exit("hab1_flight.kicad_pcb already has tracks: not overwriting manual work")
 
     comps, nets = parse_netlist(sys.argv[1])
@@ -166,6 +171,8 @@ def main():
         x, y, rot = PLACE.get(ref, (BOARD_W + 10, 10 + 5 * len(missing), 0))
         fp.SetPosition(pt(x, y))
         fp.SetOrientationDegrees(rot)
+        if ref.startswith("H"):
+            fp.Reference().SetVisible(False)  # hole labels would be cut by the board edge
         board.Add(fp)
         for pad in fp.Pads():
             net = pad_net.get((ref, pad.GetNumber()))
@@ -193,7 +200,7 @@ def main():
     # silkscreen title
     title = pcbnew.PCB_TEXT(board)
     title.SetText("HAB-1 flight board rev A  2026")
-    title.SetPosition(pt(BOARD_W / 2, BOARD_H - 2.5))
+    title.SetPosition(pt(52.0, BOARD_H - 2.5))  # between the buzzer (J11) and OLED (J10) sockets
     title.SetLayer(pcbnew.F_SilkS)
     title.SetTextSize(pcbnew.VECTOR2I(mm(1.2), mm(1.2)))
     board.Add(title)
