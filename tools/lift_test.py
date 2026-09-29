@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Lift test of the flight state machine (HW-18), runs unattended on the laptop.
 
+    python3 tools/lift_test.py        # board on USB, then ride as below; log: lift_test_<time>.log
+
+Route: down to the ground floor and wait 30 s -> up home, wait 30 s -> down again and
+wait 2 min at the bottom -> come back. Stops of the lift on the way do not matter.
+
 1. Waits until the board is 40+ m below the start and has stood still for 15 s
    (lift arrived at the ground floor) -> sends 'T' (lift test mode, ground re-zeroed).
 2. On the way up, once the state is ASCENT and h > 35 m -> sends 'H' (hang on purpose,
@@ -9,7 +14,7 @@
 """
 import glob, os, re, select, termios, time
 
-LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lift_test4.log")
+LOG = time.strftime("lift_test_%Y%m%d_%H%M%S.log")
 RE_REL = re.compile(r"rel=(-?[\d.]+)")
 RE_FLT = re.compile(r"FLT st=(\w+) h=(-?[\d.]+) vz=(-?[\d.]+) asl=(-?[\d.]+)")
 
@@ -30,7 +35,11 @@ def open_port():
 def main():
     out = open(LOG, "w", buffering=1)
     t0 = time.time()
-    say = lambda s: out.write(f"{time.time() - t0:7.1f} {s}\n")
+    def say(s):
+        text = f"{time.time() - t0:7.1f} {s}"
+        out.write(text + "\n")
+        if not s.startswith("   st="):
+            print(text, flush=True)  # events also on the screen
     fd = None
     buf = b""
     import sys
