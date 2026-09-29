@@ -41,6 +41,11 @@ RE_LOOP = re.compile(r"^LOOP: period (\d+) ms\s+frames (\d+)\s+jitter max (\d+) 
 RE_OUT = re.compile(r"DS18B20: T=(-?[\d.]+) C")
 RE_BMP = re.compile(r"^T=(-?[\d.]+) C\s+P=(-?[\d.]+) Pa\s+alt=(-?[\d.]+) m\s+rel=(-?[\d.]+) m")
 RE_HEALTH = re.compile(r"^HEALTH: (\S+) (lost|back)")
+RE_FLT = re.compile(r"\| FLT st=(\w+) h=(-?[\d.]+) vz=(-?[\d.]+) asl=(-?[\d.]+) src=(\w+)( SIM)?")
+# One-off messages of the flight state machine (HW-18), shown as they come.
+EVENT_PREFIXES = ("STATE:", "SIM:", "ALT:", "FLIGHT:")
+STATE_COLOUR = {"PRELAUNCH": DIM, "ASCENT": GREEN, "FLOAT": CYAN, "BURST": RED, "DESCENT": YELLOW,
+                "LANDED": MAGENTA}
 
 # Boot messages worth showing (dimmed) when the board restarts.
 BOOT_PATTERNS = [
@@ -88,7 +93,7 @@ def banner():
     print(DIM + "─" * 96 + RST)
 
 
-def show_block(t0, gps, imu, bmp, airborne, out_c=None):
+def show_block(t0, gps, imu, bmp, airborne, out_c=None, flt=None):
     tp = f"{DIM}{mission_time(t0)}{RST}"
     pad = " " * 12
 
@@ -120,6 +125,15 @@ def show_block(t0, gps, imu, bmp, airborne, out_c=None):
                    f"{gcol}gyro {imu['gx']:+7.1f} {imu['gy']:+7.1f} {imu['gz']:+7.1f} °/s{RST}")
     mode = f"{GREEN}AIRBORNE<4g ✓{RST}" if airborne else f"{YELLOW}AIRBORNE<4g ?{RST}"
     print(f"{pad}{imu_txt} │ {mode}")
+
+    if flt is not None:
+        st, h, vz, asl, src, sim = flt
+        col = STATE_COLOUR.get(st, "")
+        arrow = "↑" if vz > 0.3 else "↓" if vz < -0.3 else "·"
+        src_txt = {"GPS": "by GPS", "QNH": "by QNH", "STD": "std pressure"}.get(src, src)
+        sim_txt = f"  {BOLD}{YELLOW}SIM{RST}" if sim else ""
+        print(f"{pad}{col}{BOLD}FLIGHT {st:<9}{RST} h {h:+8.1f} m  {arrow} {vz:+5.1f} m/s │ "
+              f"ALT {asl:7.1f} m above sea ({src_txt}){sim_txt}")
 
 
 def main():
@@ -189,8 +203,11 @@ def main():
                         imu_f = dict(zip(["ax", "ay", "az", "gx", "gy", "gz"], [float(x) for x in v[5:11]]))
                         bmp_f = {"t": float(v[3]), "p": float(v[2]), "rel": float(v[4])}
                         airborne = airborne or v[18] == "8"
+                        f = RE_FLT.search(line)
+                        flt = (f.group(1), float(f.group(2)), float(f.group(3)), float(f.group(4)),
+                               f.group(5), bool(f.group(6))) if f else None
                         show_block(t0, gps_f, imu_f if valid & 0x02 else None, bmp_f if valid & 0x01 else None,
-                                   airborne, float(v[15]) if valid & 0x04 else None)
+                                   airborne, float(v[15]) if valid & 0x04 else None, flt)
                     continue
                 m = RE_LOOP.search(line)
                 if m:
@@ -199,6 +216,9 @@ def main():
                     print(f"{DIM}{mission_time(t0)}  LOOP   {p} ms x {n} frames · jitter {jit} us · "
                           f"sensors {int(wavg) / 1000:.1f}/{int(wmax) / 1000:.1f} ms · print {int(pmax) / 1000:.1f} ms · "
                           f"{RST}{col}overruns {ovr}{RST}")
+                    continue
+                if line.startswith(EVENT_PREFIXES):
+                    print(f"{CYAN}{BOLD}{mission_time(t0)}  {line}{RST}")
                     continue
                 m = RE_HEALTH.search(line)
                 if m:

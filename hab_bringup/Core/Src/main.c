@@ -25,6 +25,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include "flight_sm.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -85,6 +86,11 @@ typedef struct
   int32_t gps_lon_e7;
   float gps_alt_m;
   uint32_t work_us;     /* time spent reading sensors in this cycle */
+  float alt_m;          /* altitude above the launch point, input of the state machine */
+  float vz_mps;         /* vertical speed over the last 5 s, + = up */
+  float asl_m;          /* altitude above sea level (barometer, reference: asl_src) */
+  uint8_t state;        /* FlightState: PRELAUNCH ... LANDED (HW-18) */
+  uint8_t asl_src;      /* ASL_STD / ASL_GPS / ASL_QNH */
 } TelemetryFrame;
 
 /* One log record in the SPI flash: exactly half a 256-byte page, so records never
@@ -95,8 +101,11 @@ typedef struct
   uint16_t boot;         /* boot number: shows where the board restarted */
   uint32_t index;        /* record number since the log was cleared = its slot number */
   TelemetryFrame frame;
+  float ground_pa;       /* launch pressure: lets a reset in flight continue (HW-18) */
+  float asl_offset;      /* sea-level reference at that time */
+  float max_alt;         /* highest altitude above launch so far */
   uint8_t reset_cause;   /* why the board last restarted (RESET_*), 0xFF in older records */
-  uint8_t reserved[128 - 8 - sizeof(TelemetryFrame) - 1 - 2];
+  uint8_t reserved[128 - 8 - sizeof(TelemetryFrame) - 12 - 1 - 2];
   uint16_t crc;          /* CRC-16/CCITT of everything above */
 } LogRecord;
 _Static_assert(sizeof(LogRecord) == 128, "LogRecord must be 128 bytes");
@@ -172,7 +181,7 @@ _Static_assert(sizeof(LogRecord) == 128, "LogRecord must be 128 bytes");
 #define FRAME_OK_GPSFIX  0x08U
 
 /* Flight log in the SPI flash: sectors 0-1 are used by the boot test, the log starts at 8 KB. */
-#define LOG_MAGIC        0x474CU                 /* "LG" */
+#define LOG_MAGIC        0x484CU                 /* "LH": record with flight state (HW-18); older "LG" records are overwritten */
 #define LOG_START_ADDR   0x002000UL
 #define LOG_END_ADDR     0x1000000UL             /* 16 MB */
 #define LOG_RECORD_SIZE  128U
@@ -201,6 +210,15 @@ _Static_assert(sizeof(LogRecord) == 128, "LogRecord must be 128 bytes");
 
 #define WIRING_DIAG      1  /* 1 = at boot, probe the SPI flash wiring and print a verdict */
 #define GPS_ECHO_NMEA    0  /* 1 = also print every valid NMEA sentence (for logging) */
+
+/* Flight state machine (HW-18) */
+#define FRAME_SIM        0x80U  /* frame from the 'S' simulation: the altitude is synthetic */
+#define LANDED_LOG_EVERY 50U    /* after landing one record per 10 s: the flash lasts for days */
+#define BUZZER_EVERY_N   15U    /* after landing: one 200 ms beep every 3 s */
+#define SIM_SPEED        40.0   /* 'S' simulation runs 40x faster than a real flight */
+#define ASL_STD          0U     /* sea level from the standard 1013.25 hPa */
+#define ASL_GPS          1U     /* sea level calibrated against GPS altitude before launch */
+#define ASL_QNH          2U     /* sea-level pressure typed in with 'Q' */
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -223,6 +241,14 @@ SPI_HandleTypeDef hspi3;
 /* USER CODE BEGIN PV */
 static BmpCalib bmp_cal;
 static double ground_pa;  /* pressure at power-on, reference for relative altitude */
+static double asl_offset; /* altitude above sea level = IsaAltitude(p) + asl_offset */
+static uint8_t asl_src = ASL_STD;
+static FlightSm fsm;
+static int sim_active;
+static uint32_t sim_start_ms;
+static uint32_t sim_rng = 12345U;
+static LogRecord log_last;  /* last valid record found at boot: to continue after a reset */
+static int log_last_ok;
 
 /* Ring buffer: the UART interrupt writes at head, the main loop reads at tail. */
 static uint8_t gps_rx_byte;
@@ -288,7 +314,7 @@ static void PrintFixed(double v, int decimals)
     rest /= 10;
   }
   frac[decimals] = '\0';
-  printf("%ld.%s", x / scale, frac);
+  printf(decimals > 0 ? "%ld.%s" : "%ld", x / scale, frac);
 }
 
 static void PrintFixed2(double v)
@@ -382,10 +408,11 @@ static int BmpReadData(double *temp_c, double *press_pa)
   return 0;
 }
 
-/* Barometric formula (standard atmosphere), valid up to ~11 km. */
+/* Altitude difference between two pressures in the layered standard atmosphere
+   (flight_sm.h). The old single formula was ~4.7 km low at 30 km. */
 static double PressureToAltitude(double press_pa, double ref_pa)
 {
-  return 44330.0 * (1.0 - pow(press_pa / ref_pa, 1.0 / 5.255));
+  return IsaAltitude(press_pa) - IsaAltitude(ref_pa);
 }
 
 /* ---------------- SPI flash (GD25Q128 / W25Q128) ---------------- */
@@ -1110,6 +1137,8 @@ static void LogInit(void)
     while (slot < base + LOG_PER_SECTOR && LogCheckSlot(slot, &r) == 1)
     {
       last_boot = r.boot;
+      log_last = r;
+      log_last_ok = 1;
       slot++;
     }
     uint32_t skipped = 0;
@@ -1147,6 +1176,9 @@ static void LogPush(const TelemetryFrame *f)
   r->boot = boot_id;
   r->reset_cause = reset_cause;
   r->frame = *f;
+  r->ground_pa = (float)ground_pa;
+  r->asl_offset = (float)asl_offset;
+  r->max_alt = fsm.max_alt;
   log_q_head = next;
 }
 
@@ -1195,7 +1227,8 @@ static void LogDump(void)
   }
   printf("LOGDUMP BEGIN %lu\r\n", (unsigned long)log_next);
   printf("index,boot,seq,t_ms,valid,baro_pa,baro_temp_c,baro_rel_m,ax_g,ay_g,az_g,"
-         "gx_dps,gy_dps,gz_dps,out_temp_c,gps_fix,gps_sats,gps_lat,gps_lon,gps_alt_m,reset_cause\r\n");
+         "gx_dps,gy_dps,gz_dps,out_temp_c,gps_fix,gps_sats,gps_lat,gps_lon,gps_alt_m,reset_cause,"
+         "state,alt_m,vz_mps,asl_m,sim\r\n");
   uint32_t bad = 0;
   for (uint32_t slot = 0; slot < log_next; slot++)
   {
@@ -1232,7 +1265,13 @@ static void LogDump(void)
     PrintFixed(f->gps_lon_e7 / 1e7, 7);
     printf(",");
     PrintFixed(f->gps_alt_m, 1);
-    printf(",%u\r\n", r.reset_cause);
+    printf(",%u,%s,", r.reset_cause, f->state <= FS_LANDED ? FS_NAME[f->state] : "?");
+    PrintFixed(f->alt_m, 1);
+    printf(",");
+    PrintFixed(f->vz_mps, 2);
+    printf(",");
+    PrintFixed(f->asl_m, 1);
+    printf(",%u\r\n", (f->valid & FRAME_SIM) ? 1U : 0U);
   }
   printf("LOGDUMP END records=%lu broken=%lu\r\n", (unsigned long)(log_next - bad), (unsigned long)bad);
 }
@@ -1673,8 +1712,154 @@ static void FramePrint(const TelemetryFrame *f)
   PrintFixed(f->gps_alt_m, 1);
   printf(" | OUT T=");
   PrintFixed(f->out_temp_c, 2);
-  printf(" | work=%lu valid=0x%02X model@boot=%d\r\n", (unsigned long)f->work_us,
+  printf(" | work=%lu valid=0x%02X model@boot=%d", (unsigned long)f->work_us,
          (unsigned int)f->valid, gps_boot_dynmodel);
+  printf(" | FLT st=%s h=", f->state <= FS_LANDED ? FS_NAME[f->state] : "?");
+  PrintFixed(f->alt_m, 1);
+  printf(" vz=");
+  PrintFixed(f->vz_mps, 1);
+  printf(" asl=");
+  PrintFixed(f->asl_m, 1);
+  printf(" src=%s%s\r\n", f->asl_src == ASL_GPS ? "GPS" : f->asl_src == ASL_QNH ? "QNH" : "STD",
+         (f->valid & FRAME_SIM) ? " SIM" : "");
+}
+
+/* ---------------- Flight state machine (HW-18) ---------------- */
+
+static void BuzzerInit(void)
+{
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+  GPIO_InitTypeDef g = {0};
+  g.Pin = GPIO_PIN_4;  /* PB4 = D5 on the Nucleo; FET gate of the buzzer on the flight board */
+  g.Mode = GPIO_MODE_OUTPUT_PP;
+  g.Pull = GPIO_NOPULL;
+  g.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &g);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, GPIO_PIN_RESET);
+}
+
+static void BuzzerSet(int on)
+{
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, on ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+
+/* 'S' simulation: a real flight profile (5 m/s up, burst at 30 km, parachute down)
+   played SIM_SPEED times faster, with +-0.5 m of noise. The 20 s around the burst run
+   at real speed, so burst detection is tested on a real fall speed. */
+static double SimAltitude(uint32_t now_ms)
+{
+  const double pre_s = 400.0, burst_m = 30000.0, scale_m = 14600.0;
+  const double w_st = pre_s + burst_m / 5.0 - 5.0;  /* flight time 5 s before the burst */
+  const double w_r = w_st / SIM_SPEED;              /* ... reached at this real time */
+  double r = (now_ms - sim_start_ms) / 1000.0;
+  double st = r < w_r ? r * SIM_SPEED
+            : r < w_r + 20.0 ? w_st + (r - w_r)
+            : w_st + 20.0 + (r - w_r - 20.0) * SIM_SPEED;
+  double h;
+  if (st < pre_s)
+  {
+    h = 0.0;
+  }
+  else if (st < pre_s + burst_m / 5.0)
+  {
+    h = (st - pre_s) * 5.0;
+  }
+  else
+  {
+    /* descent speed 5 m/s * exp(h / 14.6 km): solved in closed form */
+    double e = exp(-burst_m / scale_m) + 5.0 * (st - pre_s - burst_m / 5.0) / scale_m;
+    h = e >= 1.0 ? 0.0 : -scale_m * log(e);
+  }
+  sim_rng = sim_rng * 1103515245U + 12345U;
+  return h + (((sim_rng >> 16) & 0xFFU) / 255.0 - 0.5);
+}
+
+/* Altitudes for this frame and one step of the state machine. */
+static void FlightUpdate(TelemetryFrame *f, double press_pa, int baro_ok)
+{
+  double alt = 0.0;
+  int alt_ok = 0;
+  int gps_ok = (f->valid & FRAME_OK_GPSFIX) != 0;
+  if (baro_ok && ground_pa > 0.0)
+  {
+    /* Before launch the sea-level reference follows the GPS (it has no weather error). */
+    if (fsm.state == FS_PRELAUNCH && !sim_active && gps_ok && f->gps_sats >= 6U)
+    {
+      double target = f->gps_alt_m - IsaAltitude(press_pa);
+      if (asl_src != ASL_GPS)
+      {
+        asl_offset = target;
+        asl_src = ASL_GPS;
+        printf("ALT: sea level now calibrated by GPS (%u satellites)\r\n", f->gps_sats);
+      }
+      else
+      {
+        asl_offset += 0.02 * (target - asl_offset);  /* ~10 s average */
+      }
+    }
+    f->asl_m = (float)(IsaAltitude(press_pa) + asl_offset);
+    alt = IsaAltitude(press_pa) - IsaAltitude(ground_pa);
+    alt_ok = 1;
+  }
+  else if (gps_ok && ground_pa > 0.0)
+  {
+    /* No barometer: GPS altitude minus the launch point's sea-level altitude. */
+    f->asl_m = f->gps_alt_m;
+    alt = f->gps_alt_m - (IsaAltitude(ground_pa) + asl_offset);
+    alt_ok = 1;
+  }
+  if (sim_active)
+  {
+    alt = SimAltitude(f->t_ms);
+    alt_ok = 1;
+    f->valid |= FRAME_SIM;
+    f->asl_m = (float)(alt + IsaAltitude(ground_pa > 0.0 ? ground_pa : 101325.0) + asl_offset);
+  }
+
+  FlightState before = fsm.state;
+  if (FlightSmUpdate(&fsm, f->t_ms, (float)alt, alt_ok))
+  {
+    printf("STATE: %s -> %s  h=", FS_NAME[before], FS_NAME[fsm.state]);
+    PrintFixed(fsm.alt, 1);
+    printf(" m  vz=");
+    PrintFixed(fsm.vz, 1);
+    printf(" m/s  max=");
+    PrintFixed(fsm.max_alt, 1);
+    printf(" m%s\r\n", sim_active ? "  (SIM)" : "");
+  }
+  f->alt_m = fsm.alt;
+  f->vz_mps = fsm.vz;
+  f->state = (uint8_t)fsm.state;
+  f->asl_src = asl_src;
+}
+
+/* At boot: if the log says we were flying and this was not a normal start, continue the
+   flight instead of calling the current altitude "ground". */
+static void FlightResume(int bmp_ok)
+{
+  FlightSmInit(&fsm, HAL_GetTick());
+  if (!log_last_ok || (log_last.frame.valid & FRAME_SIM) ||
+      log_last.frame.state < FS_ASCENT || log_last.frame.state > FS_LANDED)
+  {
+    return;
+  }
+  int unplanned = reset_cause == RESET_WATCHDOG || reset_cause == RESET_SOFTWARE ||
+                  reset_cause == RESET_BROWNOUT;
+  int in_air = bmp_ok && ground_pa > 0.0 && ground_pa < log_last.ground_pa - 1000.0;  /* ~90 m up */
+  if (!unplanned && !in_air)
+  {
+    return;  /* power-on or reset button on the ground: a new start */
+  }
+  ground_pa = log_last.ground_pa;
+  asl_offset = log_last.asl_offset;
+  asl_src = log_last.frame.asl_src;
+  FlightSmResume(&fsm, HAL_GetTick(), (FlightState)log_last.frame.state, log_last.max_alt);
+  printf("FLIGHT: resumed %s after a %s reset, launch pressure ", FS_NAME[fsm.state],
+         ResetCauseName(reset_cause));
+  PrintFixed2(ground_pa);
+  printf(" Pa, max altitude ");
+  PrintFixed(fsm.max_alt, 0);
+  printf(" m\r\n");
 }
 /* USER CODE END 0 */
 
@@ -1722,6 +1907,7 @@ int main(void)
   DelayUsInit();  /* cycle counter: microsecond delays and loop timing */
   FlashDeselect();
   ImuCsInit();
+  BuzzerInit();
   HAL_Delay(100);
   printf("\r\n=== hab_bringup: BMP390 + SPI flash + GPS ===\r\n");
 #if WIRING_DIAG
@@ -1750,8 +1936,11 @@ int main(void)
     ground_pa = sum / 10.0;
     printf("Ground reference: ");
     PrintFixed2(ground_pa);
-    printf(" Pa\r\n");
+    printf(" Pa, ~");
+    PrintFixed(IsaAltitude(ground_pa), 0);
+    printf(" m above sea level at standard pressure (GPS refines it)\r\n");
   }
+  FlightResume(bmp_ok);
 
   int ds_ok = Ds18b20Init() == 0;
   if (ds_ok)
@@ -1804,6 +1993,53 @@ int main(void)
         LogErase();
         next_ms = HAL_GetTick() + FRAME_PERIOD_MS;
       }
+      else if (cmd == 'S' || cmd == 's')
+      {
+        if (sim_active)
+        {
+          sim_active = 0;
+          FlightSmInit(&fsm, HAL_GetTick());
+          BuzzerSet(0);
+          printf("SIM: stopped, back to PRELAUNCH\r\n");
+        }
+        else if (fsm.state != FS_PRELAUNCH)
+        {
+          printf("SIM: refused, the real flight is in state %s\r\n", FS_NAME[fsm.state]);
+        }
+        else
+        {
+          sim_active = 1;
+          sim_start_ms = HAL_GetTick();
+          FlightSmInit(&fsm, sim_start_ms);
+          printf("SIM: fake flight x40 - burst at 30 km after ~2.7 min, landing after ~4 min,"
+                 " LANDED 1 min later. Press S again to stop.\r\n");
+        }
+      }
+      else if (cmd == 'Q' || cmd == 'q')
+      {
+        uint8_t d[4];
+        WatchdogFeed();
+        int hpa = -1;
+        if (HAL_UART_Receive(&hlpuart1, d, 4, 1500) == HAL_OK)
+        {
+          hpa = 0;
+          for (int i = 0; i < 4; i++)
+          {
+            hpa = (d[i] >= '0' && d[i] <= '9' && hpa >= 0) ? hpa * 10 + (d[i] - '0') : -1;
+          }
+        }
+        if (hpa >= 870 && hpa <= 1085)
+        {
+          asl_offset = -IsaAltitude(hpa * 100.0);
+          asl_src = ASL_QNH;
+          printf("ALT: sea-level pressure set to %d hPa (GPS overrides it before launch)\r\n", hpa);
+        }
+        else
+        {
+          printf("ALT: send Q and 4 digits of sea-level pressure in hPa, e.g. Q1009\r\n");
+        }
+        next_ms = HAL_GetTick() + FRAME_PERIOD_MS;
+      }
       else if (cmd == 'H' || cmd == 'h')
       {
         printf("TEST: hanging the loop on purpose, the watchdog should reset the board in ~2 s\r\n");
@@ -1835,7 +2071,7 @@ int main(void)
     frame.t_ms = HAL_GetTick();
     frame.valid &= FRAME_OK_OUT;  /* keep the last DS18B20 value between its 1 s reads */
 
-    double temp_c, press_pa;
+    double temp_c = 0.0, press_pa = 0.0;
     if (bmp_ok && BmpReadData(&temp_c, &press_pa) == 0)
     {
       frame.valid |= FRAME_OK_BARO;
@@ -1873,6 +2109,8 @@ int main(void)
       Ds18b20StartConversion();
     }
     GpsFillFrame(&frame);
+    FlightUpdate(&frame, press_pa, (frame.valid & FRAME_OK_BARO) != 0);
+    BuzzerSet(fsm.state == FS_LANDED && frame.seq % BUZZER_EVERY_N == 0U);
 
     /* A lost sensor is re-tried every 5 s; the rest of the system keeps flying meanwhile. */
     if (frame.seq % RETRY_EVERY_N == 0U)
@@ -1925,7 +2163,10 @@ int main(void)
     }
 
     uint32_t print_start = DWT->CYCCNT;
-    LogPush(&frame);
+    if (fsm.state != FS_LANDED || frame.seq % LANDED_LOG_EVERY == 0U)
+    {
+      LogPush(&frame);
+    }
     FramePrint(&frame);
     uint32_t print_us = (DWT->CYCCNT - print_start) / cycles_per_us;
 
