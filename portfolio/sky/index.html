@@ -45,6 +45,17 @@ pre{margin:0;background:#04070D;border:1px solid var(--edge);border-radius:6px;p
 pre b{color:var(--hab);font-weight:500}
 .two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px}
 @media (max-width:820px){.two{grid-template-columns:minmax(0,1fr)}}
+.globe{position:relative;height:600px;border:1px solid var(--edge);border-radius:8px;overflow:hidden;background:#03050A}
+.globe canvas{display:block;width:100%;height:100%;cursor:grab;touch-action:none}
+@media (max-width:640px){.globe{height:440px}}
+.glabel{position:absolute;left:0;top:0;transform:translate(-50%,-130%);font:500 11px/1.2 var(--mono);color:var(--txt);
+  background:rgba(7,11,20,.72);border:1px solid var(--edge);border-radius:3px;padding:2px 6px;white-space:nowrap;pointer-events:none}
+.glabel.home{color:#1A0E08;background:var(--hab);border-color:var(--hab);font-weight:600}
+.gtip{position:absolute;right:12px;top:12px;max-width:300px;background:rgba(10,15,26,.9);border:1px solid var(--edge);border-radius:6px;
+  padding:12px 14px;display:grid;gap:4px;font-size:13px;pointer-events:none}
+.gtip b{font:600 14px var(--body)}
+.gtip span{color:var(--dim);font-family:var(--mono);font-size:12px}
+.ghint{position:absolute;left:12px;bottom:10px;font:11px var(--mono);color:var(--faint);pointer-events:none}
 footer{padding-block:24px;border-top:1px solid var(--edge);font:12px var(--mono);color:var(--faint)}
 a{color:var(--hab)}
 </style>
@@ -58,6 +69,18 @@ a{color:var(--hab)}
 </header>
 
 <section>
+  <h2>Где эти спутники на самом деле</h2>
+  <p class="note">Земля, орбиты и расстояния в одном масштабе. Каждый спутник стоит там, где его в тот момент видел модуль GPS в Бангкоке, а линия — путь его сигнала до зонда. Все линии уходят на юг и запад: туда смотрит окно, остальное небо закрывает дом. Ещё 21 спутник BeiDou слышен, но где он, приёмник пока не знает, поэтому на глобусе его нет. Высота и наклон каждой орбиты настоящие, а её поворот нарисован условно: по одному наблюдению не видно, в какую сторону летит спутник.</p>
+  <div class="globe" id="globeBox">
+    <canvas id="globe" aria-label="Глобус: Бангкок и спутники, которые видит GPS зонда"></canvas>
+    <div id="glabels"></div>
+    <div class="gtip" id="gtip"></div>
+    <div class="ghint">тянуть — вращать · колесо / щипок — масштаб · наведи на спутник</div>
+  </div>
+</section>
+
+<section>
+  <h2>То же небо глазами приёмника</h2>
   <div class="grid">
     <div class="plot"><canvas id="sky" aria-label="Карта неба: спутники по направлению и высоте над горизонтом"></canvas></div>
     <div style="display:grid;gap:16px">
@@ -96,6 +119,8 @@ GPS dynModel now: RAM=<b>8</b> (AIRBORNE&lt;4g)</pre>
 <footer>HAB-1 · данные: сырые NMEA-строки GSV модуля MAX-M10S, 185 секунд · проект: <a href="https://github.com/barcklay/Cube_SAT">github.com/barcklay/Cube_SAT</a> · полёт в 3D: <a href="https://claude.ai/artifact/VP8YPhxGNXckYP5Keu93rK">HAB-1 Лаборатория</a></footer>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
 <script>
 "use strict";
 const SATS=[{"sys":"SBAS","prn":41,"el":64,"az":233,"snr":41.0,"snrMax":42,"secs":185},{"sys":"GPS","prn":6,"el":27,"az":209,"snr":37.2,"snrMax":39,"secs":185},{"sys":"GPS","prn":9,"el":8,"az":176,"snr":35.0,"snrMax":38,"secs":185},{"sys":"BeiDou","prn":6,"el":19,"az":149,"snr":32.4,"snrMax":35,"secs":185},{"sys":"Galileo","prn":29,"el":20,"az":190,"snr":31.6,"snrMax":33,"secs":28},{"sys":"GPS","prn":7,"el":56,"az":172,"snr":30.0,"snrMax":33,"secs":185},{"sys":"BeiDou","prn":2,"el":null,"az":null,"snr":29.4,"snrMax":31,"secs":185},{"sys":"BeiDou","prn":12,"el":null,"az":null,"snr":26.0,"snrMax":26,"secs":1},{"sys":"BeiDou","prn":49,"el":null,"az":null,"snr":24.5,"snrMax":25,"secs":2},{"sys":"BeiDou","prn":16,"el":null,"az":null,"snr":24.0,"snrMax":28,"secs":3},{"sys":"BeiDou","prn":9,"el":12,"az":172,"snr":23.7,"snrMax":32,"secs":148},{"sys":"BeiDou","prn":40,"el":null,"az":null,"snr":23.5,"snrMax":26,"secs":2},{"sys":"BeiDou","prn":22,"el":null,"az":null,"snr":21.0,"snrMax":26,"secs":4},{"sys":"BeiDou","prn":18,"el":null,"az":null,"snr":20.0,"snrMax":27,"secs":3},{"sys":"BeiDou","prn":47,"el":null,"az":null,"snr":20.0,"snrMax":20,"secs":1},{"sys":"BeiDou","prn":24,"el":null,"az":null,"snr":19.7,"snrMax":22,"secs":3},{"sys":"BeiDou","prn":28,"el":null,"az":null,"snr":19.5,"snrMax":20,"secs":2},{"sys":"BeiDou","prn":55,"el":null,"az":null,"snr":19.5,"snrMax":23,"secs":2},{"sys":"BeiDou","prn":19,"el":null,"az":null,"snr":19.0,"snrMax":21,"secs":2},{"sys":"BeiDou","prn":25,"el":null,"az":null,"snr":19.0,"snrMax":19,"secs":1},{"sys":"BeiDou","prn":53,"el":null,"az":null,"snr":18.0,"snrMax":18,"secs":1},{"sys":"GPS","prn":3,"el":22,"az":109,"snr":17.2,"snrMax":23,"secs":135},{"sys":"BeiDou","prn":51,"el":null,"az":null,"snr":17.0,"snrMax":19,"secs":2},{"sys":"GPS","prn":30,"el":70,"az":270,"snr":16.6,"snrMax":21,"secs":76},{"sys":"BeiDou","prn":13,"el":null,"az":null,"snr":16.0,"snrMax":16,"secs":1},{"sys":"BeiDou","prn":14,"el":null,"az":null,"snr":16.0,"snrMax":16,"secs":1},{"sys":"BeiDou","prn":20,"el":null,"az":null,"snr":15.8,"snrMax":18,"secs":4},{"sys":"BeiDou","prn":21,"el":null,"az":null,"snr":15.0,"snrMax":15,"secs":1},{"sys":"BeiDou","prn":8,"el":null,"az":null,"snr":14.0,"snrMax":14,"secs":1},{"sys":"BeiDou","prn":15,"el":null,"az":null,"snr":14.0,"snrMax":14,"secs":1},{"sys":"GPS","prn":2,"el":13,"az":36,"snr":10.4,"snrMax":15,"secs":14},{"sys":"SBAS","prn":40,"el":36,"az":256,"snr":null,"snrMax":null,"secs":0}];
@@ -161,6 +186,145 @@ function drawBars(){
   document.getElementById("bars").innerHTML=svg;
 }
 function draw(){ drawSky(); drawBars(); }
+
+/* ---------- globe: satellites in space, from az/el seen in Bangkok and each system's orbit ---------- */
+(function(){
+  if(!window.THREE) return;
+  const RE=6371, OBS={lat:13.75,lon:100.5,name:"Бангкок"};  // city only, no exact position
+  const D2R=Math.PI/180;
+  const orbitKm=s=>{ if(s.sys==="SBAS") return 42164;
+    if(s.sys==="Galileo") return 29600;
+    if(s.sys==="BeiDou") return (s.prn<=16 || (s.prn>=38&&s.prn<=40) || s.prn>=59) ? 42164 : 27906;
+    return 26560; };
+  const orbitName=s=>{ const r=orbitKm(s); return r===42164 ? (s.sys==="SBAS"||s.prn<=5||s.prn>=59 ? "геостационарная орбита" : "наклонная геосинхронная орбита") : "средняя орбита"; };
+  const la=OBS.lat*D2R, lo=OBS.lon*D2R;
+  const o=[RE*Math.cos(la)*Math.cos(lo),RE*Math.cos(la)*Math.sin(lo),RE*Math.sin(la)];
+  const E=[-Math.sin(lo),Math.cos(lo),0], N=[-Math.sin(la)*Math.cos(lo),-Math.sin(la)*Math.sin(lo),Math.cos(la)], U=o.map(v=>v/RE);
+  const toScene=p=>new THREE.Vector3(p[0]/RE,p[2]/RE,-p[1]/RE);   // matches the equirectangular texture on SphereGeometry
+  const placed=SATS.filter(s=>s.el!=null).map(s=>{
+    const A=s.az*D2R, El=s.el*D2R, d=[0,1,2].map(i=>E[i]*Math.sin(A)*Math.cos(El)+N[i]*Math.cos(A)*Math.cos(El)+U[i]*Math.sin(El));
+    const od=o[0]*d[0]+o[1]*d[1]+o[2]*d[2], R=orbitKm(s), t=-od+Math.sqrt(od*od-RE*RE+R*R);
+    return {...s, pos:toScene([o[0]+t*d[0],o[1]+t*d[1],o[2]+t*d[2]]), range:t, alt:R-RE};
+  });
+
+  const box=document.getElementById("globeBox"), canvas=document.getElementById("globe");
+  const renderer=new THREE.WebGLRenderer({canvas,antialias:true});
+  renderer.setPixelRatio(Math.min(devicePixelRatio,2)); renderer.outputEncoding=THREE.sRGBEncoding;
+  const scene=new THREE.Scene(), camera=new THREE.PerspectiveCamera(40,1,.05,400);
+  const controls=new THREE.OrbitControls(camera,canvas); controls.enableDamping=true; controls.enablePan=false;
+  controls.minDistance=2.2; controls.maxDistance=40;
+  scene.add(new THREE.AmbientLight(0xffffff,.95));
+  const sun=new THREE.DirectionalLight(0xffffff,.35); sun.position.set(5,3,5); scene.add(sun);
+
+  // stars
+  const sp=[]; for(let i=0;i<1600;i++){ const u=Math.random()*2-1,a=Math.random()*6.283,r=Math.sqrt(1-u*u); sp.push(r*Math.cos(a)*180,u*180,r*Math.sin(a)*180); }
+  const sg=new THREE.BufferGeometry(); sg.setAttribute("position",new THREE.Float32BufferAttribute(sp,3));
+  scene.add(new THREE.Points(sg,new THREE.PointsMaterial({color:0x8fa6c8,size:.35,sizeAttenuation:true,transparent:true,opacity:.7})));
+
+  // Earth + atmosphere glow
+  scene.add(new THREE.Mesh(new THREE.SphereGeometry(.995,96,64),new THREE.MeshBasicMaterial({color:0x0c1628})));
+  const grat=[]; const gp=(lat,lon)=>{ const a=lat*D2R,b=lon*D2R; return [Math.cos(a)*Math.cos(b)*1.001,Math.sin(a)*1.001,-Math.cos(a)*Math.sin(b)*1.001]; };
+  for(let lat=-60;lat<=60;lat+=30) for(let lon=-180;lon<180;lon+=3) grat.push(...gp(lat,lon),...gp(lat,lon+3));
+  for(let lon=-180;lon<180;lon+=30) for(let lat=-87;lat<87;lat+=3) grat.push(...gp(lat,lon),...gp(lat+3,lon));
+  const gg=new THREE.BufferGeometry(); gg.setAttribute("position",new THREE.Float32BufferAttribute(grat,3));
+  scene.add(new THREE.LineSegments(gg,new THREE.LineBasicMaterial({color:0x1b2a44,transparent:true,opacity:.7})));
+  // land as a field of dots: which grid points are land is read from a NASA Blue Marble image
+  const img=new Image(); img.onload=()=>{
+    const c=document.createElement("canvas"); c.width=720; c.height=360; const x=c.getContext("2d"); x.drawImage(img,0,0,720,360);
+    const px=x.getImageData(0,0,720,360).data, dots=[];
+    for(let lat=-84;lat<=84;lat+=1.4){ const step=1.4/Math.max(.15,Math.cos(lat*D2R));
+      for(let lon=-180;lon<180;lon+=step){ const i=((Math.round((90-lat)*2)%360)*720+Math.round((lon+180)*2)%720)*4;
+        const r=px[i],g=px[i+1],b=px[i+2]; const ocean=b>r+8&&b>=g-4&&r<70; if(!ocean) dots.push(...gp(lat,lon)); } }
+    const dg=new THREE.BufferGeometry(); dg.setAttribute("position",new THREE.Float32BufferAttribute(dots,3));
+    scene.add(new THREE.Points(dg,new THREE.PointsMaterial({color:0x5f7fa8,size:.016,sizeAttenuation:true})));
+  }; img.src="world.jpg";
+  const glow=new THREE.ShaderMaterial({transparent:true,side:THREE.BackSide,depthWrite:false,blending:THREE.AdditiveBlending,
+    vertexShader:"varying vec3 n; void main(){ n=normalize(normalMatrix*normal); gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }",
+    fragmentShader:"varying vec3 n; void main(){ float i=pow(.72-dot(n,vec3(0,0,1.)),3.); gl_FragColor=vec4(.3,.5,.9,1.)*i*.6; }"});
+  scene.add(new THREE.Mesh(new THREE.SphereGeometry(1.12,64,48),glow));
+
+  // geostationary ring for scale
+  const ring=[]; for(let i=0;i<=256;i++){ const a=i/256*6.283; ring.push(Math.cos(a)*42164/RE,0,Math.sin(a)*42164/RE); }
+  const rg=new THREE.BufferGeometry(); rg.setAttribute("position",new THREE.Float32BufferAttribute(ring,3));
+  scene.add(new THREE.Line(rg,new THREE.LineDashedMaterial({color:0x3a4d6b,dashSize:.25,gapSize:.18})).computeLineDistances());
+
+  // Bangkok
+  const home=toScene(o);
+  const hm=new THREE.Mesh(new THREE.SphereGeometry(.028,16,12),new THREE.MeshBasicMaterial({color:0xff6b2c})); hm.position.copy(home); scene.add(hm);
+  const pulse=new THREE.Mesh(new THREE.RingGeometry(.04,.055,40),new THREE.MeshBasicMaterial({color:0xff6b2c,transparent:true,side:THREE.DoubleSide}));
+  pulse.position.copy(home.clone().multiplyScalar(1.002)); pulse.lookAt(home.clone().multiplyScalar(2)); scene.add(pulse);
+
+  // orbits: true radius and inclination; which way the orbit turns is not known from one sighting,
+  // so the ring through the satellite is drawn with one of the two possible orientations
+  const incl=s=>{ const r=orbitKm(s); if(r===42164 && (s.sys==="SBAS"||s.prn<=5||s.prn>=59)) return 0; return s.sys==="Galileo"?56:55; };
+  placed.forEach(s=>{
+    const i=incl(s); if(i===0) return;   // geostationary: the shared equatorial ring
+    const R=orbitKm(s)/RE, rs=s.pos.clone().normalize();
+    const r=[rs.x,-rs.z,rs.y];              // back to Earth-fixed axes (z = north)
+    const rho=Math.hypot(r[0],r[1]), phi=Math.atan2(r[1],r[0]), ci=Math.cos(i*D2R), si=Math.sin(i*D2R);
+    const arg=Math.max(-1,Math.min(1,-r[2]*(ci/si)/rho)), al=phi+Math.acos(arg);
+    const n=[si*Math.cos(al),si*Math.sin(al),ci];
+    const nS=new THREE.Vector3(n[0],n[2],-n[1]), w=new THREE.Vector3().crossVectors(nS,rs).normalize();
+    const pts=[]; for(let k=0;k<=200;k++){ const th=k/200*6.2832; pts.push(rs.clone().multiplyScalar(Math.cos(th)*R).add(w.clone().multiplyScalar(Math.sin(th)*R))); }
+    scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),new THREE.LineBasicMaterial({color:COL[s.sys],transparent:true,opacity:.28})));
+  });
+
+  // satellites + signal lines
+  const COLN=Object.fromEntries(Object.entries(COL).map(([k,v])=>[k,new THREE.Color(v)]));
+  const pick=[];
+  placed.forEach(s=>{
+    const strong=Math.min(1,Math.max(.25,((s.snr||12)-10)/30));
+    const m=new THREE.Mesh(new THREE.SphereGeometry(.07+.08*strong,20,14),new THREE.MeshBasicMaterial({color:COLN[s.sys]}));
+    m.position.copy(s.pos); scene.add(m);
+    const halo=new THREE.Mesh(new THREE.SphereGeometry(.16+.16*strong,20,14),new THREE.MeshBasicMaterial({color:COLN[s.sys],transparent:true,opacity:.12,depthWrite:false}));
+    halo.position.copy(s.pos); halo.userData.sat=s; scene.add(halo); pick.push(halo);
+    const lg=new THREE.BufferGeometry().setFromPoints([home,s.pos]);
+    scene.add(new THREE.Line(lg,new THREE.LineBasicMaterial({color:COLN[s.sys],transparent:true,opacity:.2+.6*strong})));
+  });
+
+  // labels
+  const labels=document.getElementById("glabels");
+  const mk=(txt,cls)=>{ const d=document.createElement("div"); d.className="glabel"+(cls?" "+cls:""); d.textContent=txt; labels.appendChild(d); return d; };
+  const L=[{p:home,el:mk("Бангкок · зонд","home")}].concat(placed.map(s=>({p:s.pos,el:mk(s.sys+" "+s.prn)})));
+  const geoLbl={p:new THREE.Vector3(0,0,42164/RE),el:mk("геостационарная орбита · 35 800 км")}; geoLbl.el.style.color="#56657A"; L.push(geoLbl);
+
+  // hover / tap: what this satellite is and how far away
+  const tip=document.getElementById("gtip");
+  const describe=s=>`<b style="color:${COL[s.sys]}">${s.sys} ${s.prn}</b>`+
+    `<span>${orbitName(s)}, ${nf(Math.round(s.alt/100)*100)} км над Землёй</span>`+
+    `<span>до Бангкока ${nf(Math.round(s.range/100)*100)} км · сигнал в пути ${nf(s.range/299792,3)} с</span>`+
+    `<span>${s.snr!=null?`сигнал ${nf(s.snr,0)} дБ·Гц — ${s.snr>=35?"сильный":s.snr>=25?"нормальный":"слабый"}`:"сигнал в записи не пойман"}</span>`+
+    `<span>над горизонтом ${s.el}°, направление ${s.az}°</span>`;
+  const best=placed.slice().sort((a,b)=>(b.snr||0)-(a.snr||0))[0];
+  const setTip=s=>{ tip.innerHTML=describe(s); };
+  setTip(best);
+  const ray=new THREE.Raycaster(), mv=new THREE.Vector2();
+  canvas.addEventListener("pointermove",e=>{ const r=canvas.getBoundingClientRect(); mv.set((e.clientX-r.left)/r.width*2-1,-((e.clientY-r.top)/r.height)*2+1);
+    ray.setFromCamera(mv,camera); const h=ray.intersectObjects(pick)[0]; if(h){ setTip(h.object.userData.sat); canvas.style.cursor="pointer"; } else canvas.style.cursor="grab"; });
+
+  // camera: from space above the Indian Ocean, looking at Bangkok and the satellites it hears
+  const c=placed.reduce((a,s)=>a.add(s.pos),new THREE.Vector3()).multiplyScalar(1/placed.length);
+  controls.target.copy(c.clone().multiplyScalar(.45));
+  camera.position.copy(c.clone().normalize().multiplyScalar(6).add(new THREE.Vector3(0,4,0)).add(c.clone().normalize().cross(new THREE.Vector3(0,1,0)).multiplyScalar(-9)).multiplyScalar(1.6));  // far enough to see whole orbits
+  function resize(){ const w=box.clientWidth,h=box.clientHeight; renderer.setSize(w,h,false); camera.aspect=w/h; camera.updateProjectionMatrix(); }
+  new ResizeObserver(resize).observe(box); resize();
+
+  const v=new THREE.Vector3(), camDir=new THREE.Vector3();
+  const hiddenByEarth=p=>{ // is the point behind the globe as seen from the camera?
+    camDir.copy(p).sub(camera.position); const dist=camDir.length(); camDir.normalize();
+    const b=camera.position.dot(camDir), cc=camera.position.lengthSq()-1, disc=b*b-cc;
+    return disc>0 && (-b-Math.sqrt(disc))>0 && (-b-Math.sqrt(disc))<dist; };
+  let t0=performance.now();
+  (function loop(now){
+    controls.update();
+    const k=((now-t0)/1400)%1; pulse.scale.setScalar(1+k*2.5); pulse.material.opacity=1-k;
+    const w=box.clientWidth,h=box.clientHeight;
+    L.forEach(({p,el})=>{ v.copy(p).project(camera); const x=(v.x+1)/2*w, y=(1-v.y)/2*h;
+      el.hidden = v.z>1 || x<0 || x>w || y<0 || y>h || hiddenByEarth(p);
+      if(!el.hidden){ el.style.left=x+"px"; el.style.top=y+"px"; } });
+    renderer.render(scene,camera); requestAnimationFrame(loop);
+  })(t0);
+})();
 new ResizeObserver(draw).observe(document.querySelector(".plot"));
 if(document.fonts) document.fonts.ready.then(draw);
 draw();
