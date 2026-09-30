@@ -66,6 +66,7 @@ pre b{color:var(--hab);font-weight:500}
 .sview .close{position:absolute;right:12px;top:12px;font:500 13px var(--body);color:var(--txt);background:#16213A;border:1px solid var(--edge);border-radius:4px;padding:8px 12px;cursor:pointer}
 .sview .plabel{position:absolute;left:0;top:0;transform:translate(-50%,-120%);font:500 11.5px/1.3 var(--body);color:var(--txt);background:rgba(7,11,20,.85);
   border:1px solid var(--edge);border-left:2px solid var(--hab);border-radius:3px;padding:3px 8px;max-width:220px;pointer-events:none}
+.sview .cmp{top:56px;background:#0E1626}
 .sview .earth{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);font:12px var(--mono);color:var(--dim);pointer-events:none;white-space:nowrap}
 .gtip span{color:var(--dim);font-family:var(--mono);font-size:12px}
 .gviews{position:absolute;left:12px;top:12px;display:flex;gap:6px;flex-wrap:wrap}
@@ -147,6 +148,7 @@ GPS dynModel now: RAM=<b>8</b> (AIRBORNE&lt;4g)</pre>
   <div class="box"><canvas id="scv"></canvas><div id="splabels"></div>
     <div class="ttl"><b id="stitle"></b><span id="ssub"></span></div>
     <button class="close" id="sclose">Закрыть</button>
+    <button class="close cmp" id="scmp" type="button">Все типы рядом</button>
     <div class="earth">↓ Земля · модель упрощена, по фото и спецификациям</div></div>
 </div>
 
@@ -377,24 +379,24 @@ function draw(){ drawSky(); drawBars(); }
   const RB="рубидиевые атомные часы: считают время по колебаниям атомов рубидия, уход — несколько миллиардных долей секунды за сутки";
   const LR="лазерный отражатель — зеркало из уголков, как катафот. Станции на Земле посылают в него лазерный импульс и по времени возврата измеряют орбиту с точностью до сантиметров";
   const TYPES={
-    IIR:{name:"GPS Block IIR",maker:"Lockheed Martin",body:[1.9,1.9,1.5],span:11.6,panels:2,skin:"gold",ant:"helix",mass:"2 030 кг",life:"7,5 лет",
+    IIR:{name:"GPS Block IIR",maker:"Lockheed Martin",body:[1.9,1.9,1.5],span:11.6,panels:2,ph:2.2,skin:"gold",ant:"helix",mount:"cup",mass:"2 030 кг",life:"7,5 лет",
       sends:"навигационные сигналы на двух частотах: гражданский L1 C/A (его ловит любой телефон) и военный P(Y)",clock:RB,extras:[],
       wiki:"https://en.wikipedia.org/wiki/GPS_Block_IIR"},
-    IIRM:{name:"GPS Block IIR-M",maker:"Lockheed Martin",body:[1.9,1.9,1.5],span:11.6,panels:2,skin:"gold",ant:"helix",mass:"2 030 кг",life:"7,5 лет",
+    IIRM:{name:"GPS Block IIR-M",maker:"Lockheed Martin",body:[1.9,1.9,1.5],span:11.6,panels:2,ph:2.2,skin:"gold",ant:"helix",mount:"cup",mass:"2 030 кг",life:"7,5 лет",
       sends:"то же, что IIR, плюс второй гражданский сигнал L2C (точнее в городе и при помехах) и новый военный M-код",clock:RB,extras:[],
       wiki:"https://en.wikipedia.org/wiki/GPS_Block_IIR"},
-    IIF:{name:"GPS Block IIF",maker:"Boeing",body:[2.0,2.9,3.9],span:13.1,panels:3,skin:"goldblack",ant:"helix",mass:"1 633 кг",life:"12 лет",
+    IIF:{name:"GPS Block IIF",maker:"Boeing",body:[2.0,2.9,3.9],span:13.1,panels:3,ph:1.7,skin:"goldblack",ant:"helix",mount:"hex",mass:"1 633 кг",life:"12 лет",
       sends:"все сигналы GPS, включая первый гражданский L5 — мощный сигнал для авиации",clock:RB,extras:[],
       wiki:"https://en.wikipedia.org/wiki/GPS_Block_IIF"},
-    FOC:{name:"Galileo FOC",maker:"OHB (спутник), SSTL (навигационная аппаратура)",body:[2.7,1.2,1.1],span:14,panels:2,skin:"silver",ant:"plate",mass:"≈ 700 кг",life:"12 лет",
+    FOC:{name:"Galileo FOC",maker:"OHB (спутник), SSTL (навигационная аппаратура)",body:[2.7,1.2,1.1],span:14,panels:2,ph:1.1,skin:"silver",ant:"plate",mass:"≈ 700 кг",life:"12 лет",
       sends:"навигационные сигналы Galileo на трёх частотах: E1, E5 и E6",
       clock:"водородный мазер — самые точные часы на навигационных спутниках: считают время по излучению атомов водорода. Ошибка часов в миллиардную долю секунды — это уже 30 см ошибки в координатах",
       extras:["ретранслятор сигналов бедствия: ловит аварийные маяки кораблей, самолётов и туристов, передаёт их спасателям и может ответить «сигнал принят»",LR],
       wiki:"https://en.wikipedia.org/wiki/Galileo_(satellite_navigation)"},
-    BD2I:{name:"BeiDou-2 IGSO",maker:"CAST (Китай), платформа DFH-3",body:[1.7,2.0,2.2],span:17,panels:3,skin:"gold",ant:"phased",mass:"≈ 2,2 т (оценка)",life:"8 лет",
+    BD2I:{name:"BeiDou-2 IGSO",maker:"CAST (Китай), платформа DFH-3",body:[1.7,2.0,2.2],span:17,panels:3,ph:1.9,skin:"gold",ant:"phased",mass:"≈ 2,2 т (оценка)",life:"8 лет",
       sends:"навигационные сигналы BeiDou на трёх частотах: B1, B2 и B3",clock:RB,extras:[LR],
       wiki:"https://en.wikipedia.org/wiki/BeiDou"},
-    GSAT:{name:"ISRO GSAT с аппаратурой GAGAN",maker:"ISRO (Индия), платформа I-3K",body:[2.0,1.8,3.1],span:20,panels:4,skin:"gold",ant:"geo",mass:"",life:"",
+    GSAT:{name:"ISRO GSAT с аппаратурой GAGAN",maker:"ISRO (Индия), платформа I-3K",body:[2.0,1.8,3.1],span:20,panels:4,ph:2.4,skin:"gold",ant:"geo",mass:"",life:"",
       sends:"основная работа — связь и телевидение (десятки ретрансляторов Ku- и C-диапазона); попутно рассылает поправки GAGAN, которые уточняют GPS до метра — для посадки самолётов",
       clock:"своих навигационных часов нет: поправки рассчитывают наземные станции, спутник только ретранслирует их",extras:[],
       wiki:"https://en.wikipedia.org/wiki/GPS-aided_GEO_augmented_navigation"},
@@ -415,7 +417,8 @@ function draw(){ drawSky(); drawBars(); }
   const infoOf=s=>{ const e=SAT[s.sys+"-"+s.prn]; return e?{...TYPES[e.t],...e,mass:e.mass||TYPES[e.t].mass,life:e.life||TYPES[e.t].life}:null; };
 
   const M2U=.07;   // 1 metre = 0.07 scene units (Earth radius = 1): hundreds of thousands of times larger than life
-  const skinMat={gold:foilMat,goldblack:foilMat,silver:silverFoil};
+  const SKIN={gold:[foilMat],goldblack:[blackMLI,foilMat,.26,.37],silver:[silverFoil,blackMLI,.3,0]};  // [main foil, band foil, band height, band centre] as parts of the body height
+  const cupMat=foilMat.clone(); cupMat.side=THREE.DoubleSide;
   const radMat=new THREE.MeshStandardMaterial({color:0xf2f3f4,metalness:.1,roughness:.3});   // white paint / optical mirrors
   const tag=(o,t)=>{ o.userData.lbl=t; return o; };
   // a rod from a to b
@@ -435,8 +438,8 @@ function draw(){ drawSky(); drawBars(); }
   function buildSat(info){
     const [bx,by,bz]=info.body.map(v=>v*M2U), g=new THREE.Group();
     // body: x = wing axis, -Z = towards the Earth (that face carries the antennas)
-    const body=tag(new THREE.Mesh(new THREE.BoxGeometry(bx,by,bz),skinMat[info.skin]),info.ant==="geo"?"корпус · аппаратура связи и GAGAN внутри":"корпус · атомные часы и передатчики внутри"); g.add(body);
-    if(info.skin==="goldblack"){ const band=new THREE.Mesh(new THREE.BoxGeometry(bx*1.004,by*1.004,bz*.35),blackMLI); band.position.z=bz*.2; g.add(band); }
+    const body=tag(new THREE.Mesh(new THREE.BoxGeometry(bx,by,bz),SKIN[info.skin][0]),info.ant==="geo"?"корпус · аппаратура связи и GAGAN внутри":"корпус · атомные часы и передатчики внутри"); g.add(body);
+    const sk=SKIN[info.skin]; if(sk[1]){ const band=new THREE.Mesh(new THREE.BoxGeometry(bx*1.004,by*1.004,bz*sk[2]),sk[1]); band.position.z=bz*sk[3]; g.add(band); }
     // white radiators on the faces that never see the Sun (±Y): mirror tiles in a grid
     [-1,1].forEach(sd=>{ const rg=new THREE.Group(), nx=4, nz=3, tw=bx*.8/nx, th=bz*.7/nz;
       for(let i=0;i<nx;i++) for(let j=0;j<nz;j++){ const tl=new THREE.Mesh(new THREE.BoxGeometry(tw*.92,.0015,th*.92),radMat); tl.position.set((i+.5)*tw-bx*.4,0,(j+.5)*th-bz*.35); rg.add(tl); }
@@ -447,7 +450,7 @@ function draw(){ drawSky(); drawBars(); }
     // command antenna on top (space side)
     const tt=new THREE.Mesh(new THREE.ConeGeometry(.007,.02,12),whiteMat); tt.rotation.x=Math.PI/2; tt.position.set(0,0,bz/2+.01); g.add(tt);
     // solar wings: drive + yoke + N panels in a frame with gaps
-    const wingLen=(info.span*M2U-bx)/2-.02, pw=(wingLen-.03)/info.panels, ph=Math.min(bz*.95,wingLen*.36);
+    const wingLen=(info.span*M2U-bx)/2-.02, pw=(wingLen-.03)/info.panels, ph=info.ph*M2U;
     [-1,1].forEach(sd=>{
       const drv=new THREE.Mesh(new THREE.CylinderGeometry(.007,.007,.012,12),boomMat); drv.rotation.z=Math.PI/2; drv.position.x=sd*(bx/2+.006); g.add(drv);
       const wing=new THREE.Group(); wing.userData.wing=true; wing.position.x=sd*(bx/2+.012); g.add(wing);
@@ -461,15 +464,19 @@ function draw(){ drawSky(); drawBars(); }
     if(info.ant==="helix"){ // GPS: 12 helix antennas (4 inner, 8 outer) on a round ground plate on the Earth face
       const R=Math.min(bx,by)*.45, hm=new THREE.MeshStandardMaterial({color:0xf4f1e8,metalness:.3,roughness:.35});
       const plate=tag(new THREE.Mesh(new THREE.CylinderGeometry(R,R,.004,32),frameMat),"12 спиральных антенн · передают сигнал GPS на Землю"); plate.rotation.x=Math.PI/2; plate.position.z=face-.002; g.add(plate);
+      let hz=face-.004;
+      if(info.mount==="cup"){ const cup=new THREE.Mesh(new THREE.CylinderGeometry(R*1.12,R,.028,40,1,true),cupMat); cup.rotation.x=Math.PI/2; cup.position.z=face-.014; g.add(cup); }
+      else { const hex=new THREE.Mesh(new THREE.CylinderGeometry(R*1.18,R*1.18,.014,6),whiteMat); hex.rotation.x=Math.PI/2; hex.position.z=face-.007; g.add(hex); hz=face-.014; }
       const mast=new THREE.CylinderGeometry(.0018,.0018,.045,6); mast.rotateX(Math.PI/2); mast.translate(0,0,-.0225);
       [[4,.3],[8,.76]].forEach(([n,rf])=>{ for(let i=0;i<n;i++){ const a=i/n*6.283+(n===8?.39:0), r=R*rf, hx=new THREE.Group();
         hx.add(new THREE.Mesh(helixGeo,hm)); hx.add(new THREE.Mesh(mast,whiteMat));
         const cup=new THREE.Mesh(new THREE.CylinderGeometry(.009,.007,.004,16),nozMat); cup.rotation.x=Math.PI/2; hx.add(cup);
-        hx.rotation.z=a; hx.position.set(Math.cos(a)*r,Math.sin(a)*r,face-.004); g.add(hx); } });
+        hx.rotation.z=a; hx.position.set(Math.cos(a)*r,Math.sin(a)*r,hz); g.add(hx); } });
       const lr=new THREE.Mesh(new THREE.BoxGeometry(.02,.014,.004),nozMat); lr.position.set(bx*.4,-by*.4,face-.002); g.add(lr);
     } else if(info.ant==="plate"||info.ant==="phased"){ // Galileo / BeiDou: large flat navigation antenna of patch elements
-      const w=Math.min(bx,by)*.9; const a=new THREE.Mesh(new THREE.BoxGeometry(w,w,.01),[frameMat,frameMat,frameMat,frameMat,frameMat,plateMats[info.ant]]);
-      a.position.z=face-.005; tag(a,"навигационная антенна · смотрит на Землю"); g.add(a);
+      const w=Math.min(bx,by)*.9; const a=info.ant==="plate"?new THREE.Mesh(new THREE.BoxGeometry(w,w,.01),[frameMat,frameMat,frameMat,frameMat,frameMat,plateMats.plate])
+        :new THREE.Mesh(new THREE.CylinderGeometry(w*.5,w*.5,.02,40),[frameMat,frameMat,plateMats.phased]);
+      if(info.ant==="phased") a.rotation.x=Math.PI/2; a.position.z=face-(info.ant==="plate"?.005:.01); tag(a,"навигационная антенна · смотрит на Землю"); g.add(a);
       // laser retro-reflector: a panel of small glass corner cubes
       const lrg=new THREE.Group(), glass=new THREE.MeshStandardMaterial({color:0x10131a,metalness:1,roughness:.05});
       for(let i=0;i<5;i++) for(let j=0;j<4;j++){ const c=new THREE.Mesh(new THREE.CylinderGeometry(.0028,.0028,.003,6),glass); c.rotation.x=Math.PI/2; c.position.set((i-2)*.0065+(j%2)*.003,(j-1.5)*.0058,0); lrg.add(c); }
@@ -543,11 +550,15 @@ function draw(){ drawSky(); drawBars(); }
 
   // ---- close-up viewer: the model alone, slowly turning, parts named ----
   let V=null;
-  function openViewer(s){
+  let lastSat=null, comparing=false;
+  const spanTxt=v=>nf(v,1).replace(",0","");
+  function openViewer(s,compare){
     const info=infoOf(s); if(!info) return;
+    lastSat=s; comparing=!!compare;
     const box=document.getElementById("sview"); box.hidden=false;
-    document.getElementById("stitle").textContent=`${s.sys} ${s.prn} · ${info.name}`;
-    document.getElementById("ssub").textContent=`${info.id} · ${info.maker} · размах ≈ ${nf(info.span,1).replace(",0","")} м`;
+    document.getElementById("stitle").textContent=compare?"Все типы в одном масштабе":`${s.sys} ${s.prn} · ${info.name}`;
+    document.getElementById("ssub").textContent=compare?"сверху вниз по размаху панелей: от 11,6 до 20 метров":`${info.id} · ${info.maker} · размах ≈ ${spanTxt(info.span)} м`;
+    document.getElementById("scmp").textContent=compare?`← ${s.sys} ${s.prn}`:"Все типы рядом";
     if(!V){
       const cv=document.getElementById("scv"), r=new THREE.WebGLRenderer({canvas:cv,antialias:true});
       r.setPixelRatio(Math.min(devicePixelRatio,2)); r.outputEncoding=THREE.sRGBEncoding;
@@ -572,16 +583,31 @@ function draw(){ drawSky(); drawBars(); }
       loop();
     }
     if(V.model) V.sc.remove(V.model);
-    const m=buildSat(info); const size=new THREE.Box3().setFromObject(m).getSize(new THREE.Vector3()).length();
-    m.scale.setScalar(3/size); m.rotation.x=-Math.PI/2; m.children.forEach(c=>{ if(c.userData.wing) c.rotation.x=Math.PI; });  // cells toward the viewer
-    V.sc.add(m); V.model=m;
-    V.cam.position.set(1.2,.9,3.4); V.ctl.target.set(0,0,0);
+    const face=m=>{ m.rotation.x=-Math.PI/2; m.children.forEach(c=>{ if(c.userData.wing) c.rotation.x=Math.PI; }); return m; };  // Earth down, cells toward the viewer
+    let m;
+    if(compare){ // one row per type, same scale, the Earth face down
+      m=new THREE.Group(); let y=0, prev=0;
+      ["IIR","IIF","FOC","BD2I","GSAT"].forEach(k=>{ const t=TYPES[k], one=face(buildSat(t)), half=t.body[2]*M2U/2;
+        y-=prev?prev+half+.13:0; prev=half+.05;   // body + antennas below it, then room for the next name
+        one.traverse(o=>{ delete o.userData.lbl; }); one.position.y=y; m.add(one);
+        const a=new THREE.Object3D(); a.position.set(0,y+t.body[2]*M2U/2+.02,0);
+        a.userData.lbl=`${t.name.replace("ISRO GSAT с аппаратурой GAGAN","GSAT (GAGAN)")} · ${spanTxt(t.span)} м`; m.add(a);
+      });
+      const bb=new THREE.Box3().setFromObject(m), sz=bb.getSize(new THREE.Vector3()), c=bb.getCenter(new THREE.Vector3());
+      const k=Math.min(2.1/sz.y,3.4/sz.x); m.scale.setScalar(k); m.position.copy(c).multiplyScalar(-k); m.position.y-=.12;
+      V.cam.position.set(1.5,.5,4.1); V.ctl.autoRotate=false;
+    } else {
+      m=face(buildSat(info)); const size=new THREE.Box3().setFromObject(m).getSize(new THREE.Vector3()).length();
+      m.scale.setScalar(3/size); V.cam.position.set(1.2,.9,3.4); V.ctl.autoRotate=!matchMedia("(prefers-reduced-motion: reduce)").matches;
+    }
+    V.sc.add(m); V.model=m; V.ctl.target.set(0,0,0);
     const lay=document.getElementById("splabels"); lay.innerHTML=""; V.labels=[];
     m.traverse(o=>{ if(o.userData.lbl){ const d=document.createElement("div"); d.className="plabel"; d.textContent=o.userData.lbl; lay.appendChild(d); V.labels.push({o,el:d}); } });
     document.getElementById("sclose").focus();
   }
   const closeViewer=()=>{ document.getElementById("sview").hidden=true; };
   document.getElementById("sclose").onclick=closeViewer;
+  document.getElementById("scmp").onclick=()=>openViewer(lastSat,!comparing);
   document.getElementById("sview").addEventListener("click",e=>{ if(e.target.id==="sview") closeViewer(); });
   addEventListener("keydown",e=>{ if(e.key==="Escape") closeViewer(); });
 
