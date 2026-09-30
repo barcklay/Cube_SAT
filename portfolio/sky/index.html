@@ -1,8 +1,3 @@
-<!doctype html>
-<html lang="ru">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Небо над HAB-1</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
@@ -82,8 +77,7 @@ pre b{color:var(--hab);font-weight:500}
 footer{padding-block:24px;border-top:1px solid var(--edge);font:12px var(--mono);color:var(--faint)}
 a{color:var(--hab)}
 </style>
-</head>
-<body>
+
 <div class="wrap">
 <header>
   <p class="eyebrow">HAB-1 · GPS u-blox MAX-M10S · запись 29.09.2026, 21:44 · Бангкок, у окна</p>
@@ -263,7 +257,7 @@ function draw(){ drawSky(); drawBars(); }
   controls.minDistance=2.2; controls.maxDistance=40;
   // The Sun where it really was: 29.09.2026 14:44 UTC (21:44 in Bangkok). Declination -2.4°,
   // subsolar longitude = -(UTC-12h)*15° + equation of time (+9.9 min) -> about -38.8°.
-  scene.add(new THREE.AmbientLight(0x8a9cc0,.6));
+  scene.add(new THREE.AmbientLight(0x8a9cc0,.35));
   const sun=new THREE.DirectionalLight(0xfff4e0,2.2); sun.position.copy(SUN).multiplyScalar(50); scene.add(sun);
 
   // stars
@@ -336,17 +330,48 @@ function draw(){ drawSky(); drawBars(); }
   // satellites + signal lines
   const COLN=Object.fromEntries(Object.entries(COL).map(([k,v])=>[k,new THREE.Color(v)]));
   const pick=[];
-  // Satellite models: gold-foil body, two solar wings turned to the Sun, antennas facing the Earth.
-  // Drawn hundreds of thousands of times larger than life, otherwise invisible at this scale.
-  const cellTex=(()=>{ const c=document.createElement("canvas"); c.width=64; c.height=256; const x=c.getContext("2d");
-    x.fillStyle="#132a5c"; x.fillRect(0,0,64,256); x.strokeStyle="#3a5a9a"; x.lineWidth=1.5;
-    for(let i=0;i<=64;i+=16){ x.beginPath(); x.moveTo(i,0); x.lineTo(i,256); x.stroke(); }
-    for(let j=0;j<=256;j+=16){ x.beginPath(); x.moveTo(0,j); x.lineTo(64,j); x.stroke(); }
-    const t=new THREE.CanvasTexture(c); t.encoding=THREE.sRGBEncoding; return t; })();
-  const panelMat=new THREE.MeshStandardMaterial({map:cellTex,metalness:.35,roughness:.35,side:THREE.DoubleSide});
-  const foilMat=new THREE.MeshStandardMaterial({color:0xe2b04a,metalness:.35,roughness:.4,emissive:0x2a1a00});  // gold multi-layer insulation
-  const whiteMat=new THREE.MeshStandardMaterial({color:0xe8e8e2,metalness:.2,roughness:.5});
-  const boomMat=new THREE.MeshStandardMaterial({color:0x9aa2ab,metalness:.7,roughness:.4});
+  // Satellite models: crinkled gold/silver foil, solar wings with a real cell grid turned to the Sun,
+  // antennas facing the Earth. Drawn hundreds of thousands of times larger than life, otherwise invisible.
+  const canv=(w,h,f)=>{ const c=document.createElement("canvas"); c.width=w; c.height=h; f(c.getContext("2d"),w,h); return c; };
+  const rnd=(s=>()=>(s=(s*16807)%2147483647)/2147483647)(7);
+  // multi-layer insulation: thin foil stretched over the body, full of small flat facets and creases
+  function foil(base,dark,lite){
+    const col=canv(512,512,(x,w,h)=>{ x.fillStyle=base; x.fillRect(0,0,w,h);
+      for(let i=0;i<2600;i++){ const cx=rnd()*w,cy=rnd()*h,r=5+rnd()*20,n=3+(rnd()*3|0),a0=rnd()*6.28;
+        x.beginPath(); for(let k=0;k<n;k++){ const a=a0+k/n*6.28+rnd()*.6; x.lineTo(cx+Math.cos(a)*r*(.5+rnd()),cy+Math.sin(a)*r*(.5+rnd())); }
+        x.closePath(); x.globalAlpha=.1+rnd()*.3; x.fillStyle=rnd()<.5?dark:lite; x.fill(); }
+      x.globalAlpha=.35; x.lineWidth=1; for(let i=0;i<140;i++){ x.strokeStyle=rnd()<.5?dark:lite; x.beginPath(); let px=rnd()*w,py=rnd()*h; x.moveTo(px,py);
+        for(let k=0;k<4;k++){ px+=(rnd()-.5)*50; py+=(rnd()-.5)*50; x.lineTo(px,py); } x.stroke(); }
+      });
+    const t=new THREE.CanvasTexture(col); t.encoding=THREE.sRGBEncoding; t.anisotropy=4;
+    return new THREE.MeshStandardMaterial({map:t,bumpMap:t,bumpScale:.003,metalness:.6,roughness:.3}); }
+  const foilMat=foil("#dcaa45","#7a5214","#fff0b8");          // gold (outer layer is Kapton over aluminium)
+  const silverFoil=foil("#b9bec6","#5d636d","#f4f6fa");
+  const blackMLI=foil("#1b1c20","#050506","#4a4c55"); blackMLI.metalness=.5; blackMLI.roughness=.5;
+  // solar cells: 8 x 8 cells with cut corners, silver gaps, thin current collectors
+  const cellTex=(()=>{ const t=new THREE.CanvasTexture(canv(512,512,(x,w)=>{ const n=8,s=w/n,g=3,c=7;
+      x.fillStyle="#9aa0aa"; x.fillRect(0,0,w,w);
+      for(let i=0;i<n;i++) for(let j=0;j<n;j++){ const X=i*s+g,Y=j*s+g,S=s-2*g;
+        const gr=x.createLinearGradient(X,Y,X+S,Y+S); gr.addColorStop(0,"#1c3a7a"); gr.addColorStop(1,"#0b1a42"); x.fillStyle=gr;
+        x.beginPath(); x.moveTo(X+c,Y); x.lineTo(X+S-c,Y); x.lineTo(X+S,Y+c); x.lineTo(X+S,Y+S-c); x.lineTo(X+S-c,Y+S); x.lineTo(X+c,Y+S); x.lineTo(X,Y+S-c); x.lineTo(X,Y+c); x.closePath(); x.fill();
+        x.strokeStyle="rgba(170,190,230,.22)"; x.lineWidth=.8; for(let k=5;k<S;k+=5){ x.beginPath(); x.moveTo(X+2,Y+k); x.lineTo(X+S-2,Y+k); x.stroke(); }
+        x.fillStyle="rgba(200,205,215,.8)"; x.fillRect(X+S*.3,Y,1.6,S); x.fillRect(X+S*.7,Y,1.6,S); } }));
+    t.encoding=THREE.sRGBEncoding; t.anisotropy=8; return t; })();
+  const cellMat=new THREE.MeshPhysicalMaterial({map:cellTex,metalness:.3,roughness:.22,clearcoat:1,clearcoatRoughness:.08});
+  const panelBack=new THREE.MeshStandardMaterial({color:0xd9d6cc,roughness:.7});
+  const frameMat=new THREE.MeshStandardMaterial({color:0xb4bac2,metalness:.8,roughness:.35});
+  const panelMat=[frameMat,frameMat,cellMat,panelBack,frameMat,frameMat];   // box faces: +x -x +y(-> Sun) -y +z -z
+  const whiteMat=new THREE.MeshStandardMaterial({color:0xeeeee8,roughness:.45});
+  const boomMat=new THREE.MeshStandardMaterial({color:0x9aa2ab,metalness:.8,roughness:.3});
+  const nozMat=new THREE.MeshStandardMaterial({color:0x3a3c42,metalness:.9,roughness:.35,side:THREE.DoubleSide});
+  // reflections: a dark sky with the blue Earth below and a bright Sun, so metal and foil have something to mirror
+  function spaceEnv(r){
+    const t=new THREE.CanvasTexture(canv(512,256,(x,w,h)=>{ x.fillStyle="#04060b"; x.fillRect(0,0,w,h);
+      const e=x.createLinearGradient(0,h*.5,0,h); e.addColorStop(0,"#5b86c4"); e.addColorStop(.25,"#23477e"); e.addColorStop(1,"#0c1c38"); x.fillStyle=e; x.fillRect(0,h*.55,w,h*.45);
+      const s=x.createRadialGradient(w*.3,h*.3,0,w*.3,h*.3,60); s.addColorStop(0,"#ffffff"); s.addColorStop(.15,"#fff3da"); s.addColorStop(1,"rgba(255,240,210,0)"); x.fillStyle=s; x.fillRect(0,0,w,h);
+      x.fillStyle="rgba(200,215,240,.55)"; x.fillRect(w*.62,h*.18,w*.12,h*.2); }));
+    t.mapping=THREE.EquirectangularReflectionMapping; t.encoding=THREE.sRGBEncoding;
+    const p=new THREE.PMREMGenerator(r), env=p.fromEquirectangular(t).texture; p.dispose(); return env; }
   /* Real satellites behind each PRN (sources: NAVCEN, GSC Europa, gps.gov PRN list, AAI/GAGAN,
      Wikipedia/eoPortal; items marked (?) in the notes are read from photos, not published specs). */
   const RB="рубидиевые атомные часы: считают время по колебаниям атомов рубидия, уход — несколько миллиардных долей секунды за сутки";
@@ -390,45 +415,80 @@ function draw(){ drawSky(); drawBars(); }
   const infoOf=s=>{ const e=SAT[s.sys+"-"+s.prn]; return e?{...TYPES[e.t],...e,mass:e.mass||TYPES[e.t].mass,life:e.life||TYPES[e.t].life}:null; };
 
   const M2U=.07;   // 1 metre = 0.07 scene units (Earth radius = 1): hundreds of thousands of times larger than life
-  const skinMat={gold:foilMat,
-    goldblack:foilMat,
-    silver:new THREE.MeshStandardMaterial({color:0xd3d7dd,metalness:.4,roughness:.35})};
-  const blackMLI=new THREE.MeshStandardMaterial({color:0x17181b,metalness:.3,roughness:.6});
-  const radMat=new THREE.MeshStandardMaterial({color:0xeef0f2,metalness:.1,roughness:.4});
+  const skinMat={gold:foilMat,goldblack:foilMat,silver:silverFoil};
+  const radMat=new THREE.MeshStandardMaterial({color:0xf2f3f4,metalness:.1,roughness:.3});   // white paint / optical mirrors
   const tag=(o,t)=>{ o.userData.lbl=t; return o; };
+  // a rod from a to b
+  const rod=(a,b,r,m)=>{ const d=new THREE.Vector3().subVectors(b,a), o=new THREE.Mesh(new THREE.CylinderGeometry(r,r,d.length(),6),m);
+    o.position.copy(a).addScaledVector(d,.5); o.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),d.normalize()); return o; };
+  // a helix antenna: a wire wound around a thin mast, pointing along -Z
+  class Helix extends THREE.Curve{ constructor(r,len,turns){ super(); this.r=r; this.len=len; this.n=turns; }
+    getPoint(t,o=new THREE.Vector3()){ const a=t*this.n*6.283; return o.set(Math.cos(a)*this.r,Math.sin(a)*this.r,-t*this.len); } }
+  const helixGeo=new THREE.TubeGeometry(new Helix(.0075,.045,4.5),120,.0011,5,false);
+  // patch-antenna panel texture (Galileo / BeiDou): rows of round radiating elements on a white panel
+  const patchTex=(bg,dot,n)=>{ const t=new THREE.CanvasTexture(canv(256,256,(x,w)=>{ x.fillStyle=bg; x.fillRect(0,0,w,w); const s=w/n;
+      for(let i=0;i<n;i++) for(let j=0;j<n;j++){ x.fillStyle=dot; x.beginPath(); x.arc((i+.5)*s,(j+.5)*s,s*.33,0,6.283); x.fill();
+        x.strokeStyle="rgba(0,0,0,.18)"; x.lineWidth=2; x.stroke(); }
+      x.strokeStyle="rgba(0,0,0,.25)"; x.lineWidth=4; x.strokeRect(2,2,w-4,w-4); })); t.encoding=THREE.sRGBEncoding; return t; };
+  const plateMats={plate:new THREE.MeshStandardMaterial({map:patchTex("#eeeeea","#d2cfc6",4),roughness:.55}),
+    phased:new THREE.MeshStandardMaterial({map:patchTex("#e4ddc8","#b89a5a",6),roughness:.5,metalness:.2})};
   function buildSat(info){
     const [bx,by,bz]=info.body.map(v=>v*M2U), g=new THREE.Group();
-    // body: x = wing axis, z = towards the Earth (the model's -Z face carries the antennas)
+    // body: x = wing axis, -Z = towards the Earth (that face carries the antennas)
     const body=tag(new THREE.Mesh(new THREE.BoxGeometry(bx,by,bz),skinMat[info.skin]),info.ant==="geo"?"корпус · аппаратура связи и GAGAN внутри":"корпус · атомные часы и передатчики внутри"); g.add(body);
-    if(info.skin==="goldblack"){ const band=new THREE.Mesh(new THREE.BoxGeometry(bx*1.01,by*1.01,bz*.35),blackMLI); band.position.z=bz*.2; g.add(band); }
-    // white radiator panels on the faces that never see the Sun (±Y)
-    [-1,1].forEach(sd=>{ const r=new THREE.Mesh(new THREE.BoxGeometry(bx*.8,.002,bz*.7),radMat); r.position.y=sd*(by/2+.001); if(sd>0) tag(r,"белые радиаторы · сбрасывают тепло в космос"); g.add(r); });
-    // solar wings: boom + N panels with gaps
-    const wingLen=(info.span*M2U-bx)/2-.02, pw=(wingLen-.02)/info.panels, ph=Math.min(bz*.95,wingLen*.36);
+    if(info.skin==="goldblack"){ const band=new THREE.Mesh(new THREE.BoxGeometry(bx*1.004,by*1.004,bz*.35),blackMLI); band.position.z=bz*.2; g.add(band); }
+    // white radiators on the faces that never see the Sun (±Y): mirror tiles in a grid
+    [-1,1].forEach(sd=>{ const rg=new THREE.Group(), nx=4, nz=3, tw=bx*.8/nx, th=bz*.7/nz;
+      for(let i=0;i<nx;i++) for(let j=0;j<nz;j++){ const tl=new THREE.Mesh(new THREE.BoxGeometry(tw*.92,.0015,th*.92),radMat); tl.position.set((i+.5)*tw-bx*.4,0,(j+.5)*th-bz*.35); rg.add(tl); }
+      rg.position.y=sd*(by/2+.0008); if(sd>0) tag(rg.children[nx*nz-1],"белые радиаторы · сбрасывают тепло в космос"); g.add(rg); });
+    // attitude thrusters: small nozzles at the corners of the space-facing (+Z) side
+    [[-1,-1],[1,-1],[-1,1],[1,1]].forEach(([sx,sy],k)=>{ const n=new THREE.Mesh(new THREE.CylinderGeometry(.0025,.006,.012,10,1,true),nozMat);
+      n.rotation.x=-Math.PI/2; n.position.set(sx*bx*.4,sy*by*.4,bz/2+.006); if(k===3) tag(n,"двигатели ориентации · держат спутник антеннами к Земле"); g.add(n); });
+    // command antenna on top (space side)
+    const tt=new THREE.Mesh(new THREE.ConeGeometry(.007,.02,12),whiteMat); tt.rotation.x=Math.PI/2; tt.position.set(0,0,bz/2+.01); g.add(tt);
+    // solar wings: drive + yoke + N panels in a frame with gaps
+    const wingLen=(info.span*M2U-bx)/2-.02, pw=(wingLen-.03)/info.panels, ph=Math.min(bz*.95,wingLen*.36);
     [-1,1].forEach(sd=>{
-      const boom=new THREE.Mesh(new THREE.CylinderGeometry(.004,.004,.04,6),boomMat); boom.rotation.z=Math.PI/2; boom.position.x=sd*(bx/2+.02); g.add(boom);
-      const wing=new THREE.Group(); wing.userData.wing=true; wing.position.x=sd*(bx/2+.04); g.add(wing);
-      for(let i=0;i<info.panels;i++){ const pnl=new THREE.Mesh(new THREE.BoxGeometry(pw*.96,.003,ph),panelMat); pnl.position.x=sd*(pw*(i+.5));
-        if(sd>0&&i===info.panels-1) tag(pnl,"солнечные панели · размах "+nf(info.span,1).replace(",0","")+" м, всегда развёрнуты к Солнцу"); wing.add(pnl); }
+      const drv=new THREE.Mesh(new THREE.CylinderGeometry(.007,.007,.012,12),boomMat); drv.rotation.z=Math.PI/2; drv.position.x=sd*(bx/2+.006); g.add(drv);
+      const wing=new THREE.Group(); wing.userData.wing=true; wing.position.x=sd*(bx/2+.012); g.add(wing);
+      wing.add(rod(new THREE.Vector3(0,0,0),new THREE.Vector3(sd*.03,0,ph*.42),.0018,boomMat));   // V-shaped yoke to the first panel
+      wing.add(rod(new THREE.Vector3(0,0,0),new THREE.Vector3(sd*.03,0,-ph*.42),.0018,boomMat));
+      for(let i=0;i<info.panels;i++){ const pnl=new THREE.Mesh(new THREE.BoxGeometry(pw*.965,.0035,ph),panelMat); pnl.position.x=sd*(.03+pw*(i+.5));
+        if(sd>0&&i===info.panels-1) tag(pnl,"солнечные панели · размах "+nf(info.span,1).replace(",0","")+" м, всегда развёрнуты к Солнцу"); wing.add(pnl);
+        if(i) [-1,1].forEach(e=>{ const h=new THREE.Mesh(new THREE.BoxGeometry(pw*.04,.005,.008),boomMat); h.position.set(sd*(.03+pw*i),0,e*ph*.35); wing.add(h); }); }  // hinges
     });
     const face=-bz/2-.001;
-    if(info.ant==="helix"){ // GPS: a ring of ~12 short white helix antennas on the Earth face
-      const hm=new THREE.MeshStandardMaterial({color:0xf2f2ee,roughness:.5});
-      const plate=tag(new THREE.Mesh(new THREE.CylinderGeometry(Math.min(bx,by)*.45,Math.min(bx,by)*.45,.004,24),blackMLI),"12 спиральных антенн · передают сигнал GPS на Землю"); plate.rotation.x=Math.PI/2; plate.position.z=face; g.add(plate);
-      [[4,.14],[8,.34]].forEach(([n,rf])=>{ for(let i=0;i<n;i++){ const a=i/n*6.283+(n===8?.2:0), r=Math.min(bx,by)*rf;
-        const h=new THREE.Mesh(new THREE.CylinderGeometry(.006,.009,.04,8),hm); h.rotation.x=Math.PI/2; h.position.set(Math.cos(a)*r,Math.sin(a)*r,face-.02); g.add(h); } });
-    } else if(info.ant==="plate"||info.ant==="phased"){ // Galileo / BeiDou: large flat navigation antenna
-      const w=Math.min(bx,by)*.9; const a=new THREE.Mesh(new THREE.BoxGeometry(w,w,.01),info.ant==="plate"?radMat:new THREE.MeshStandardMaterial({color:0xd9d3c0,roughness:.6}));
+    if(info.ant==="helix"){ // GPS: 12 helix antennas (4 inner, 8 outer) on a round ground plate on the Earth face
+      const R=Math.min(bx,by)*.45, hm=new THREE.MeshStandardMaterial({color:0xf4f1e8,metalness:.3,roughness:.35});
+      const plate=tag(new THREE.Mesh(new THREE.CylinderGeometry(R,R,.004,32),frameMat),"12 спиральных антенн · передают сигнал GPS на Землю"); plate.rotation.x=Math.PI/2; plate.position.z=face-.002; g.add(plate);
+      const mast=new THREE.CylinderGeometry(.0018,.0018,.045,6); mast.rotateX(Math.PI/2); mast.translate(0,0,-.0225);
+      [[4,.3],[8,.76]].forEach(([n,rf])=>{ for(let i=0;i<n;i++){ const a=i/n*6.283+(n===8?.39:0), r=R*rf, hx=new THREE.Group();
+        hx.add(new THREE.Mesh(helixGeo,hm)); hx.add(new THREE.Mesh(mast,whiteMat));
+        const cup=new THREE.Mesh(new THREE.CylinderGeometry(.009,.007,.004,16),nozMat); cup.rotation.x=Math.PI/2; hx.add(cup);
+        hx.rotation.z=a; hx.position.set(Math.cos(a)*r,Math.sin(a)*r,face-.004); g.add(hx); } });
+      const lr=new THREE.Mesh(new THREE.BoxGeometry(.02,.014,.004),nozMat); lr.position.set(bx*.4,-by*.4,face-.002); g.add(lr);
+    } else if(info.ant==="plate"||info.ant==="phased"){ // Galileo / BeiDou: large flat navigation antenna of patch elements
+      const w=Math.min(bx,by)*.9; const a=new THREE.Mesh(new THREE.BoxGeometry(w,w,.01),[frameMat,frameMat,frameMat,frameMat,frameMat,plateMats[info.ant]]);
       a.position.z=face-.005; tag(a,"навигационная антенна · смотрит на Землю"); g.add(a);
-      const lr=tag(new THREE.Mesh(new THREE.CylinderGeometry(.012,.012,.006,6),new THREE.MeshStandardMaterial({color:0x2b2f38,metalness:.9,roughness:.15})),"лазерный отражатель · зеркало для измерения орбиты");
-      lr.rotation.x=Math.PI/2; lr.position.set(bx*.42,by*.38,face-.012); g.add(lr);
-      if(info.ant==="plate"){ const sar=tag(new THREE.Mesh(new THREE.CylinderGeometry(.004,.004,.05,6),boomMat),"антенна спасательной системы · слышит аварийные маяки");
-        sar.rotation.x=Math.PI/2; sar.position.set(-bx*.42,-by*.3,face-.03); g.add(sar); }
-    } else if(info.ant==="geo"){ // GEO telecom: two big dish reflectors east and west, small GAGAN antenna on the Earth deck
+      // laser retro-reflector: a panel of small glass corner cubes
+      const lrg=new THREE.Group(), glass=new THREE.MeshStandardMaterial({color:0x10131a,metalness:1,roughness:.05});
+      for(let i=0;i<5;i++) for(let j=0;j<4;j++){ const c=new THREE.Mesh(new THREE.CylinderGeometry(.0028,.0028,.003,6),glass); c.rotation.x=Math.PI/2; c.position.set((i-2)*.0065+(j%2)*.003,(j-1.5)*.0058,0); lrg.add(c); }
+      lrg.add(new THREE.Mesh(new THREE.BoxGeometry(.036,.026,.002),frameMat)); lrg.children[lrg.children.length-1].position.z=.002;
+      lrg.position.set(bx*.36,by*.34,face-.012); tag(lrg.children[7],"лазерный отражатель · зеркало для измерения орбиты"); g.add(lrg);
+      if(info.ant==="plate"){ const sar=tag(new THREE.Mesh(new THREE.CylinderGeometry(.012,.008,.03,16),whiteMat),"антенна спасательной системы · слышит аварийные маяки");
+        sar.rotation.x=Math.PI/2; sar.position.set(-bx*.36,-by*.3,face-.02); g.add(sar);
+        const sd2=new THREE.Mesh(new THREE.CylinderGeometry(.013,.013,.002,20),frameMat); sd2.rotation.x=Math.PI/2; sd2.position.set(-bx*.36,-by*.3,face-.036); g.add(sd2); }
+    } else if(info.ant==="geo"){ // GEO telecom: two big dish reflectors east and west with feeds on struts, small GAGAN antenna on the Earth deck
       const dm=new THREE.MeshStandardMaterial({color:0xf4f4f0,roughness:.45,side:THREE.DoubleSide});
-      [-1,1].forEach(sd=>{ const d=new THREE.Mesh(new THREE.SphereGeometry(2.1*M2U/2*1.4,24,10,0,6.283,0,.75),dm); if(sd>0) tag(d,"тарелка связи · телевидение и связь для Индии");
-        d.rotation.set(0,0,sd*Math.PI/2); d.rotateX(-.5); d.position.set(0,sd*(by/2+.06),-bz*.25); g.add(d); });
-      const cup=tag(new THREE.Mesh(new THREE.CylinderGeometry(.02,.012,.03,12),new THREE.MeshStandardMaterial({color:0xf2f2ee})),"антенна GAGAN · поправки к GPS"); cup.rotation.x=Math.PI/2; cup.position.z=face-.015; g.add(cup);
+      const R=2.1*M2U/2*1.4, cap=.75;
+      [-1,1].forEach(sd=>{ const dish=new THREE.Group(), d=new THREE.Mesh(new THREE.SphereGeometry(R,32,10,0,6.283,0,cap),dm); dish.add(d);
+        if(sd>0) tag(d,"тарелка связи · телевидение и связь для Индии");
+        const f=new THREE.Vector3(0,R*.42,0), feed=new THREE.Mesh(new THREE.ConeGeometry(.009,.022,12),foilMat); feed.position.copy(f); dish.add(feed);
+        for(let k=0;k<3;k++){ const a=k/3*6.283; dish.add(rod(new THREE.Vector3(Math.cos(a)*R*Math.sin(cap)*.95,R*Math.cos(cap),Math.sin(a)*R*Math.sin(cap)*.95),f,.0012,boomMat)); }
+        dish.rotation.set(0,0,sd*Math.PI/2); dish.rotateX(-.5); dish.position.set(0,sd*(by/2+.06),-bz*.25); g.add(dish);
+        g.add(rod(new THREE.Vector3(0,sd*by/2,-bz*.25),new THREE.Vector3(0,sd*(by/2+.03),-bz*.25),.003,boomMat)); });
+      const cup=tag(new THREE.Mesh(new THREE.CylinderGeometry(.02,.012,.03,16),whiteMat),"антенна GAGAN · поправки к GPS"); cup.rotation.x=Math.PI/2; cup.position.z=face-.015; g.add(cup);
+      [[.3,.25],[-.3,.3]].forEach(([u,v])=>{ const h=new THREE.Mesh(new THREE.CylinderGeometry(.014,.006,.03,4,1,true),foilMat); h.rotation.x=Math.PI/2; h.position.set(bx*u,by*v,face-.015); g.add(h); });  // C-band horns
     }
     return g;
   }
@@ -443,6 +503,7 @@ function draw(){ drawSky(); drawBars(); }
     g.children.forEach(c=>{ if(c.userData.wing) c.rotation.x=Math.atan2(sunLocal.z,sunLocal.y); });
     g.position.copy(s.pos); return g;
   }
+  scene.environment=spaceEnv(renderer);
   placed.forEach(s=>{
     const strong=Math.min(1,Math.max(.25,((s.snr||12)-10)/30));
     scene.add(makeSat(s));
@@ -493,7 +554,8 @@ function draw(){ drawSky(); drawBars(); }
       const sc=new THREE.Scene(), cam=new THREE.PerspectiveCamera(35,1,.01,100);
       const ctl=new THREE.OrbitControls(cam,cv); ctl.enableDamping=true; ctl.enablePan=false;
       ctl.autoRotate=!matchMedia("(prefers-reduced-motion: reduce)").matches; ctl.autoRotateSpeed=1.2;
-      sc.add(new THREE.HemisphereLight(0xcfe0ff,0x1a2233,.9));
+      r.toneMapping=THREE.ACESFilmicToneMapping; r.toneMappingExposure=1.15; sc.environment=spaceEnv(r);
+      sc.add(new THREE.HemisphereLight(0xcfe0ff,0x1a2233,.35));
       const key=new THREE.DirectionalLight(0xfff4e0,2.4); key.position.set(3,4,5); sc.add(key);
       const fill=new THREE.DirectionalLight(0x8fb2ff,.6); fill.position.set(-4,-2,-3); sc.add(fill);
       V={r,sc,cam,ctl,cv,model:null,labels:[]};
@@ -511,7 +573,7 @@ function draw(){ drawSky(); drawBars(); }
     }
     if(V.model) V.sc.remove(V.model);
     const m=buildSat(info); const size=new THREE.Box3().setFromObject(m).getSize(new THREE.Vector3()).length();
-    m.scale.setScalar(3/size); m.rotation.x=-Math.PI/2;
+    m.scale.setScalar(3/size); m.rotation.x=-Math.PI/2; m.children.forEach(c=>{ if(c.userData.wing) c.rotation.x=Math.PI; });  // cells toward the viewer
     V.sc.add(m); V.model=m;
     V.cam.position.set(1.2,.9,3.4); V.ctl.target.set(0,0,0);
     const lay=document.getElementById("splabels"); lay.innerHTML=""; V.labels=[];
@@ -579,6 +641,3 @@ new ResizeObserver(draw).observe(document.querySelector(".plot"));
 if(document.fonts) document.fonts.ready.then(draw);
 draw();
 </script>
-
-</body>
-</html>
