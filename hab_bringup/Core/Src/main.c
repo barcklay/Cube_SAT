@@ -26,6 +26,7 @@
 #include <string.h>
 #include <math.h>
 #include "flight_sm.h"
+#include "lora_e22.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -2089,6 +2090,12 @@ int main(void)
         {
           printf("ALT: send Q and 4 digits of sea-level pressure in hPa, e.g. Q1009\r\n");
         }
+        next_ms = HAL_GetTick() + FRAME_PERIOD_MS;
+      }
+      else if (cmd == 'L' || cmd == 'l')
+      {
+        WatchdogFeed();
+        LoraCheck();
         next_ms = HAL_GetTick() + FRAME_PERIOD_MS;
       }
       else if (cmd == 'H' || cmd == 'h')
