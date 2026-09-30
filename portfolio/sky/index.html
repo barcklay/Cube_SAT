@@ -17,6 +17,7 @@
   --mono:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
 }
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.55 var(--body);padding-inline:16px;padding-block:0 48px}
 .wrap{max-width:1100px;margin:0 auto}
 header{display:grid;gap:12px;padding-block:40px 28px}
@@ -72,7 +73,9 @@ pre b{color:var(--hab);font-weight:500}
   border:1px solid var(--edge);border-left:2px solid var(--hab);border-radius:3px;padding:3px 8px;max-width:220px;pointer-events:none}
 .sview .earth{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);font:12px var(--mono);color:var(--dim);pointer-events:none;white-space:nowrap}
 .gtip span{color:var(--dim);font-family:var(--mono);font-size:12px}
-.gback{position:absolute;left:12px;top:12px;font:500 12px var(--body);color:var(--txt);background:rgba(10,15,26,.9);
+.gviews{position:absolute;left:12px;top:12px;display:flex;gap:6px;flex-wrap:wrap}
+.gback[aria-pressed="true"]{background:var(--txt);color:#0A0E14}
+.gback{font:500 12px var(--body);color:var(--txt);background:rgba(10,15,26,.9);
   border:1px solid var(--edge);border-radius:4px;padding:8px 12px;cursor:pointer}
 .gback:focus-visible{outline:2px solid var(--hab);outline-offset:2px}
 .ghint{position:absolute;left:12px;bottom:10px;font:11px var(--mono);color:var(--faint);pointer-events:none}
@@ -96,7 +99,7 @@ a{color:var(--hab)}
     <div id="glabels"></div>
     <div class="gtip" id="gtip"></div>
     <div class="ghint">тянуть — вращать · колесо / щипок — масштаб · нажми на спутник, чтобы подлететь</div>
-    <button class="gback" id="gback" hidden>← Вся картина</button>
+    <div class="gviews"><button class="gback" id="vsun" aria-pressed="true">Восход</button><button class="gback" id="vall" aria-pressed="false">Все спутники</button><button class="gback" id="gback" hidden>← Назад</button></div>
   </div>
 </section>
 
@@ -247,13 +250,19 @@ function draw(){ drawSky(); drawBars(); }
   const box=document.getElementById("globeBox"), canvas=document.getElementById("globe");
   const renderer=new THREE.WebGLRenderer({canvas,antialias:true});
   renderer.setPixelRatio(Math.min(devicePixelRatio,2)); renderer.outputEncoding=THREE.sRGBEncoding;
-  const scene=new THREE.Scene(), camera=new THREE.PerspectiveCamera(40,1,.05,400);
+  const SUN_LAT=-2.4*D2R, SUN_LON=-38.8*D2R;
+  const SUN=new THREE.Vector3(Math.cos(SUN_LAT)*Math.cos(SUN_LON),Math.sin(SUN_LAT),-Math.cos(SUN_LAT)*Math.sin(SUN_LON)).normalize();
+  // View from the night side toward the Sun: the Sun sits just behind the Earth's limb, so it rises
+  // over a big arc of night-time Earth at the bottom; w is the screen "up" (phi = 140° around the Sun axis).
+  const sa=new THREE.Vector3().crossVectors(SUN,new THREE.Vector3(0,1,0)).normalize(), sb=new THREE.Vector3().crossVectors(SUN,sa);
+  const VIEW_W=sa.clone().multiplyScalar(Math.cos(140*D2R)).add(sb.clone().multiplyScalar(Math.sin(140*D2R))).normalize();
+  const VIEW_D=5.2, VIEW_B=Math.asin(1/VIEW_D);
+  const scene=new THREE.Scene(), camera=new THREE.PerspectiveCamera(50,1,.05,400);
+  camera.up.copy(VIEW_W);
   const controls=new THREE.OrbitControls(camera,canvas); controls.enableDamping=true; controls.enablePan=false;
   controls.minDistance=2.2; controls.maxDistance=40;
   // The Sun where it really was: 29.09.2026 14:44 UTC (21:44 in Bangkok). Declination -2.4°,
   // subsolar longitude = -(UTC-12h)*15° + equation of time (+9.9 min) -> about -38.8°.
-  const SUN_LAT=-2.4*D2R, SUN_LON=-38.8*D2R;
-  const SUN=new THREE.Vector3(Math.cos(SUN_LAT)*Math.cos(SUN_LON),Math.sin(SUN_LAT),-Math.cos(SUN_LAT)*Math.sin(SUN_LON)).normalize();
   scene.add(new THREE.AmbientLight(0x8a9cc0,.6));
   const sun=new THREE.DirectionalLight(0xfff4e0,2.2); sun.position.copy(SUN).multiplyScalar(50); scene.add(sun);
 
@@ -263,29 +272,40 @@ function draw(){ drawSky(); drawBars(); }
   scene.add(new THREE.Points(sg,new THREE.PointsMaterial({color:0x8fa6c8,size:.35,sizeAttenuation:true,transparent:true,opacity:.7})));
 
   // Earth + atmosphere glow
-  scene.add(new THREE.Mesh(new THREE.SphereGeometry(.995,96,64),new THREE.MeshBasicMaterial({color:0x0c1628})));
-  const grat=[]; const gp=(lat,lon)=>{ const a=lat*D2R,b=lon*D2R; return [Math.cos(a)*Math.cos(b)*1.001,Math.sin(a)*1.001,-Math.cos(a)*Math.sin(b)*1.001]; };
-  for(let lat=-60;lat<=60;lat+=30) for(let lon=-180;lon<180;lon+=3) grat.push(...gp(lat,lon),...gp(lat,lon+3));
-  for(let lon=-180;lon<180;lon+=30) for(let lat=-87;lat<87;lat+=3) grat.push(...gp(lat,lon),...gp(lat+3,lon));
-  const gg=new THREE.BufferGeometry(); gg.setAttribute("position",new THREE.Float32BufferAttribute(grat,3));
-  scene.add(new THREE.LineSegments(gg,new THREE.LineBasicMaterial({color:0x1b2a44,transparent:true,opacity:.7})));
-  // land as a field of dots: which grid points are land is read from a NASA Blue Marble image
-  const img=new Image(); img.onload=()=>{
-    const c=document.createElement("canvas"); c.width=720; c.height=360; const x=c.getContext("2d"); x.drawImage(img,0,0,720,360);
-    const px=x.getImageData(0,0,720,360).data, dots=[], cols=[];
-    const day=new THREE.Color(0x8fb2dc), night=new THREE.Color(0x24344f), tmp=new THREE.Color(), pv=new THREE.Vector3();
-    for(let lat=-84;lat<=84;lat+=1.4){ const step=1.4/Math.max(.15,Math.cos(lat*D2R));
-      for(let lon=-180;lon<180;lon+=step){ const i=((Math.round((90-lat)*2)%360)*720+Math.round((lon+180)*2)%720)*4;
-        const r=px[i],g=px[i+1],b=px[i+2]; const ocean=b>r+8&&b>=g-4&&r<70; if(!ocean){ const q=gp(lat,lon); dots.push(...q);
-          const lit=Math.max(0,Math.min(1,pv.set(q[0],q[1],q[2]).normalize().dot(SUN)*4+.5)); tmp.copy(night).lerp(day,lit); cols.push(tmp.r,tmp.g,tmp.b); } } }
-    const dg=new THREE.BufferGeometry(); dg.setAttribute("position",new THREE.Float32BufferAttribute(dots,3));
-    dg.setAttribute("color",new THREE.Float32BufferAttribute(cols,3));
-    scene.add(new THREE.Points(dg,new THREE.PointsMaterial({vertexColors:true,size:.016,sizeAttenuation:true})));
-  }; img.src="world.jpg";
-  const glow=new THREE.ShaderMaterial({transparent:true,side:THREE.BackSide,depthWrite:false,blending:THREE.AdditiveBlending,
-    vertexShader:"varying vec3 n; void main(){ n=normalize(normalMatrix*normal); gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }",
-    fragmentShader:"varying vec3 n; void main(){ float i=pow(.72-dot(n,vec3(0,0,1.)),3.); gl_FragColor=vec4(.3,.5,.9,1.)*i*.6; }"});
-  scene.add(new THREE.Mesh(new THREE.SphereGeometry(1.12,64,48),glow));
+  // Earth as seen from orbit: city lights on the night side (NASA Black Marble), the day side
+  // from Blue Marble, a warm band at the terminator. Day and night follow the real Sun.
+  const tl=new THREE.TextureLoader();
+  const tNight=tl.load("night.jpg"), tDay=tl.load("world.jpg"); [tNight,tDay].forEach(t=>{ t.anisotropy=8; });
+  const earthMat=new THREE.ShaderMaterial({uniforms:{tNight:{value:tNight},tDay:{value:tDay},uSun:{value:SUN}},
+    vertexShader:"varying vec2 vUv; varying vec3 vN; varying vec3 vV; void main(){ vUv=uv; vN=normalize(mat3(modelMatrix)*normal); vV=normalize(normalMatrix*normal); gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }",
+    fragmentShader:`uniform sampler2D tNight,tDay; uniform vec3 uSun; varying vec2 vUv; varying vec3 vN; varying vec3 vV;
+      void main(){ float d=dot(normalize(vN),normalize(uSun));
+        vec3 night=texture2D(tNight,vUv).rgb;
+        float lum=max(max(night.r,night.g),night.b);
+        vec3 lights=smoothstep(.22,.75,lum)*vec3(1.,.72,.38)*1.9;          // city lights, warm gold
+        vec3 nightCol=night*vec3(.35,.4,.6)+lights;                         // moonlit land stays faintly blue
+        vec3 dayCol=pow(texture2D(tDay,vUv).rgb,vec3(1.15))*.8;
+        vec3 col=mix(nightCol,dayCol,smoothstep(-.06,.22,d));
+        col+=vec3(1.,.5,.18)*exp(-pow((d-.02)/.07,2.))*.28;                  // sunrise band at the terminator
+        float edge=pow(1.-max(0.,vV.z),3.);
+        col+=vec3(.25,.5,1.)*edge*(.15+.9*smoothstep(-.3,.3,d));             // blue haze at the edge
+        gl_FragColor=vec4(col,1.); }`});
+  scene.add(new THREE.Mesh(new THREE.SphereGeometry(1,128,96),earthMat));
+  // thin atmosphere: a blue limb, brighter where the Sun shines through it
+  const glow=new THREE.ShaderMaterial({transparent:true,side:THREE.BackSide,depthWrite:false,blending:THREE.AdditiveBlending,uniforms:{uSun:{value:SUN}},
+    vertexShader:"varying vec3 n; varying vec3 w; void main(){ n=normalize(normalMatrix*normal); w=normalize(mat3(modelMatrix)*normal); gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }",
+    fragmentShader:`uniform vec3 uSun; varying vec3 n; varying vec3 w;
+      void main(){ float rim=pow(max(0.,.74-dot(n,vec3(0,0,1.))),3.)*.9;
+        float lit=.25+1.6*smoothstep(-.35,.4,dot(w,normalize(uSun)));
+        vec3 c=mix(vec3(.25,.5,1.),vec3(1.,.62,.3),smoothstep(.25,-.1,dot(w,normalize(uSun)))*.35);
+        gl_FragColor=vec4(c*rim*lit,1.); }`});
+  scene.add(new THREE.Mesh(new THREE.SphereGeometry(1.08,96,64),glow));
+  // the Sun: a glare far away; the Earth hides its core, so it rises over the limb
+  const gc=document.createElement("canvas"); gc.width=gc.height=256; { const x=gc.getContext("2d"), gr=x.createRadialGradient(128,128,0,128,128,128);
+    gr.addColorStop(0,"rgba(255,255,255,1)"); gr.addColorStop(.08,"rgba(255,244,220,.95)"); gr.addColorStop(.25,"rgba(255,170,90,.35)"); gr.addColorStop(1,"rgba(255,120,40,0)");
+    x.fillStyle=gr; x.fillRect(0,0,256,256); }
+  const sunSprite=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(gc),blending:THREE.AdditiveBlending,depthWrite:false,transparent:true}));
+  sunSprite.position.copy(SUN).multiplyScalar(90); sunSprite.scale.setScalar(26); scene.add(sunSprite);
 
   // geostationary ring for scale
   const ring=[]; for(let i=0;i<=256;i++){ const a=i/256*6.283; ring.push(Math.cos(a)*42164/RE,0,Math.sin(a)*42164/RE); }
@@ -454,8 +474,8 @@ function draw(){ drawSky(); drawBars(); }
     `<span>${s.snr!=null?`сигнал ${nf(s.snr,0)} дБ·Гц — ${s.snr>=35?"сильный":s.snr>=25?"нормальный":"слабый"}`:"сигнал в записи не пойман"}</span>`+
     `<span>над горизонтом ${s.el}°, направление ${s.az}°</span>`; };
   const best=placed.slice().sort((a,b)=>(b.snr||0)-(a.snr||0))[0];
-  const setTip=s=>{ tip.innerHTML=describe(s); const b=document.getElementById("gview"); if(b) b.onclick=()=>openViewer(s); };
-  setTip(best);
+  const setTip=s=>{ tip.hidden=false; tip.innerHTML=describe(s); const b=document.getElementById("gview"); if(b) b.onclick=()=>openViewer(s); };
+  tip.hidden=true;
   const ray=new THREE.Raycaster(), mv=new THREE.Vector2();
   canvas.addEventListener("pointermove",e=>{ const r=canvas.getBoundingClientRect(); mv.set((e.clientX-r.left)/r.width*2-1,-((e.clientY-r.top)/r.height)*2+1);
     ray.setFromCamera(mv,camera); const h=ray.intersectObjects(pick)[0]; if(h){ setTip(h.object.userData.sat); canvas.style.cursor="pointer"; } else canvas.style.cursor="grab"; });
@@ -518,11 +538,21 @@ function draw(){ drawSky(); drawBars(); }
   });
 
   // camera: from space above the Indian Ocean, looking at Bangkok and the satellites it hears
-  const c=placed.reduce((a,s)=>a.add(s.pos),new THREE.Vector3()).multiplyScalar(1/placed.length);
-  controls.target.copy(c.clone().multiplyScalar(.45));
-  camera.position.copy(c.clone().normalize().multiplyScalar(6).add(new THREE.Vector3(0,4,0)).add(c.clone().normalize().cross(new THREE.Vector3(0,1,0)).multiplyScalar(-9)).multiplyScalar(1.6));  // far enough to see whole orbits
+  // camera on the night side, a little above the Earth-Sun line: the Sun rises over the lower limb,
+  // Bangkok's lights and the satellites it hears are in front
+  camera.position.copy(SUN.clone().multiplyScalar(Math.cos(VIEW_B)).sub(VIEW_W.clone().multiplyScalar(Math.sin(VIEW_B))).multiplyScalar(-VIEW_D));
+  controls.target.copy(camera.position.clone().add(SUN.clone().add(VIEW_W.clone().multiplyScalar(.3)).normalize().multiplyScalar(VIEW_D)));
   const HOME_P=camera.position.clone(), HOME_T=controls.target.clone();
-  document.getElementById("gback").onclick=()=>{ flyTo(HOME_P.clone(),HOME_T.clone()); document.getElementById("gback").hidden=true; };
+  // overview: from far out on the night side, all satellites and their lines to Bangkok in view
+  const cAll=placed.reduce((a,s)=>a.add(s.pos),new THREE.Vector3()).multiplyScalar(1/placed.length);
+  const ALL_T=cAll.clone().multiplyScalar(.45);
+  const ALL_P=cAll.clone().normalize().multiplyScalar(.6).add(SUN.clone().multiplyScalar(-.45)).add(VIEW_W.clone().multiplyScalar(.35)).normalize().multiplyScalar(24);
+  let lastView="sun";
+  const setView=v=>{ lastView=v; document.getElementById("vsun").setAttribute("aria-pressed",v==="sun"); document.getElementById("vall").setAttribute("aria-pressed",v==="all");
+    document.getElementById("gback").hidden=true; v==="sun"?flyTo(HOME_P.clone(),HOME_T.clone()):flyTo(ALL_P.clone(),ALL_T.clone()); };
+  document.getElementById("vsun").onclick=()=>setView("sun");
+  document.getElementById("vall").onclick=()=>setView("all");
+  document.getElementById("gback").onclick=()=>setView(lastView);
   controls.minDistance=.3;
   function resize(){ const w=box.clientWidth,h=box.clientHeight; renderer.setSize(w,h,false); camera.aspect=w/h; camera.updateProjectionMatrix(); }
   new ResizeObserver(resize).observe(box); resize();
