@@ -246,7 +246,7 @@ button[aria-pressed="true"]{background:var(--txt);color:#0A0E14;border-color:var
     <li>Подъём 5 м/с. Шар 1,9 м у земли и лопается при 7,9 м, газ считается при температуре воздуха. Высота разрыва получается из этого расчёта.</li>
     <li>Спуск на парашюте: 5 м/с у земли, на высоте быстрее пропорционально √(ρ₀/ρ).</li>
     <li>Температура внутри бокса — грубая оценка. Её заменят данные теста с сухим льдом (HW-34).</li>
-    <li>Поверхность Земли, облака и показания IMU в момент разрыва условные. Размеры шара, строп и корпуса в масштабе.</li>
+    <li>Сцена показана на рассвете: с высоты 30 км Солнце уже встало, а на земле ещё ночь. Огни городов — снимок NASA Black Marble, дневная земля — Blue Marble. Облака и показания IMU в момент разрыва условные. Размеры шара, строп и корпуса в масштабе.</li>
   </ul>
   <h3>Точка старта</h3>
   <ul>
@@ -345,17 +345,19 @@ const controls=new THREE.OrbitControls(camera,canvas);
 controls.enableDamping=true; controls.dampingFactor=.07; controls.enablePan=false;
 controls.minDistance=.25; controls.maxDistance=60;
 
-const SUN=new THREE.Vector3(.75,.45,-.5).normalize();
+/* dawn: the Sun 3° below the flat horizon, almost due east (late September). From 30 km the
+   horizon dips 5.6°, so the probe already sees the sunrise while the ground is still in night. */
+const SUN=new THREE.Vector3(.998,-.052,.045).normalize();
 
 /* ---- sky + planet: one analytic shader on a sphere that follows the camera ---- */
 const skyMat=new THREE.ShaderMaterial({
   side:THREE.BackSide,depthWrite:false,depthTest:false,
   uniforms:{uAlt:{value:0},uDip2:{value:0},uSun:{value:SUN},uR:{value:6371000},uLat0:{value:0},uLon0:{value:0},
-    tWide:{value:null},tNear:{value:null},uHasTex:{value:0},uWideB:{value:new THREE.Vector4()},uNearB:{value:new THREE.Vector4()}},
+    tWide:{value:null},tNear:{value:null},tNightW:{value:null},uHasTex:{value:0},uWideB:{value:new THREE.Vector4()},uNearB:{value:new THREE.Vector4()}},
   vertexShader:`varying vec3 vDir; void main(){ vec4 w=modelMatrix*vec4(position,1.); vDir=w.xyz-cameraPosition; gl_Position=projectionMatrix*viewMatrix*w; }`,
   fragmentShader:`
     precision highp float;
-    varying vec3 vDir; uniform float uAlt,uDip2,uR,uLat0,uLon0,uHasTex; uniform vec3 uSun; uniform sampler2D tWide,tNear; uniform vec4 uWideB,uNearB;
+    varying vec3 vDir; uniform float uAlt,uDip2,uR,uLat0,uLon0,uHasTex; uniform vec3 uSun; uniform sampler2D tWide,tNear,tNightW; uniform vec4 uWideB,uNearB;
     vec4 img(sampler2D t,vec4 b,vec2 ll){ vec2 uv=(ll-b.xy)/(b.zw-b.xy); float m=smoothstep(0.,.03,uv.x)*smoothstep(0.,.03,uv.y)*smoothstep(0.,.03,1.-uv.x)*smoothstep(0.,.03,1.-uv.y); return vec4(texture2D(t,clamp(uv,0.,1.)).rgb,m); }
     float hash(vec3 p){p=fract(p*.3183099+.1);p*=17.;return fract(p.x*p.y*p.z*(p.x+p.y+p.z));}
     float noise(vec3 x){vec3 i=floor(x),f=fract(x);f=f*f*(3.-2.*f);
@@ -366,8 +368,12 @@ const skyMat=new THREE.ShaderMaterial({
       vec3 d=normalize(vDir);
       float f=exp(-uAlt/7500.);                          // air above the camera, 1 at sea level
       float eh=-sqrt(uDip2);                            // sine of the horizon dip
-      vec3 zen=mix(vec3(.004,.007,.018),vec3(.13,.34,.78),pow(f,.6));
-      vec3 hor=mix(vec3(.30,.58,1.),vec3(.70,.83,.97),pow(f,.7));
+      // dawn: dark zenith, horizon warm towards the Sun and deep blue away from it
+      vec2 dh=normalize(d.xz+1e-5), sh=normalize(uSun.xz+1e-5);
+      float warm=pow(max(dot(dh,sh),0.),3.), away=max(-dot(dh,sh),0.);
+      vec3 zen=mix(vec3(.003,.005,.014),vec3(.07,.16,.38),pow(f,.6))*(.55+.35*warm);
+      vec3 hor=mix(vec3(.12,.24,.55),vec3(.30,.42,.70),pow(f,.7));
+      hor=mix(hor,vec3(1.,.55,.22),warm*.85)*(1.-.55*away);
       float s=max(dot(d,uSun),0.);
       vec3 col;
       if(d.y<eh){
@@ -380,7 +386,8 @@ const skyMat=new THREE.ShaderMaterial({
         alb*=.85+.3*fbm(p/9000.);
         float cl=smoothstep(.55,.72,fbm(p/22000.+3.))*smoothstep(0.,2500.,uAlt+400.);
         alb=mix(alb,vec3(.92),cl*.85);
-        vec3 lit=alb*(.18+1.05*max(dot(n,uSun),0.));
+        float day=smoothstep(-.02,.14,dot(n,uSun));                 // twilight: mostly night under the probe
+        vec3 lit=alb*(.03+1.05*max(dot(n,uSun),0.))*day+alb*.025;
         if(uHasTex>.5){
           // real imagery (NASA Blue Marble) placed by latitude/longitude of the hit point
           float sl=sin(uLat0),ca=cos(uLat0),so=sin(uLon0),co=cos(uLon0);
@@ -390,24 +397,30 @@ const skyMat=new THREE.ShaderMaterial({
           vec4 w=img(tWide,uWideB,ll), q=img(tNear,uNearB,ll);
           vec3 im=mix(w.rgb,q.rgb,q.a)*(.75+.45*max(dot(n,uSun),0.));
           im=mix(im,vec3(.92),cl*.45);
-          lit=mix(lit,im,max(w.a,q.a));
+          // night side: city lights from NASA Black Marble, warm gold
+          vec3 nt=img(tNightW,uWideB,ll).rgb; float lum=max(max(nt.r,nt.g),nt.b);
+          // break the 400 m pixels of the night image into sparkles of streets and towns
+          float spark=noise(p/260.)*.65+noise(p/70.)*.55;
+          vec3 nightIm=nt*vec3(.22,.26,.4)+pow(smoothstep(.32,.95,lum*(.45+spark)),1.4)*vec3(1.,.7,.35)*1.3;
+          lit=mix(lit,mix(nightIm,im,day),max(w.a,q.a));
         }
         float L=30000.+uAlt*4.;
         float hz=1.-exp(-t/L);
-        col=mix(lit,hor*.92,clamp(hz,0.,1.)*.9);
+        vec3 hazeG=mix(vec3(.05,.09,.2),vec3(.55,.3,.14),warm*.55)*(.45+.55*f);   // cool haze over the night ground
+        col=mix(lit,hazeG,clamp(hz,0.,1.)*.8);
       } else {
         float x=d.y-eh, w=mix(.028,.55,pow(f,.55));
         col=mix(hor,zen,pow(clamp(x/w,0.,1.),.55));
-        col+=vec3(.25,.55,1.)*exp(-pow(x/(w*.18),2.))*(1.-f)*.55;   // the thin blue line
+        col+=mix(vec3(.25,.55,1.),vec3(1.,.6,.3),warm*.6)*exp(-pow(x/(w*.18),2.))*(.35+.65*(1.-f))*.8;   // the thin bright line
       }
-      col+=vec3(1.,.9,.75)*(pow(s,7.)*.30*(.35+f)+pow(s,900.)*6.+pow(s,60.)*.25);
+      col+=vec3(1.,.8,.55)*(pow(s,8.)*.35*(.35+f)+pow(s,60.)*.22)+vec3(1.,.95,.85)*pow(s,4000.)*8.;
       gl_FragColor=vec4(pow(col,vec3(1./1.05)),1.);
     }`
 });
 const sky=new THREE.Mesh(new THREE.SphereGeometry(1500,48,32),skyMat); sky.renderOrder=-10; sky.frustumCulled=false; scene.add(sky);
 
-const hemi=new THREE.HemisphereLight(0x9cc8ff,0x6a7a8a,.7); scene.add(hemi);
-const sun=new THREE.DirectionalLight(0xfff3e2,2.4); sun.position.copy(SUN).multiplyScalar(20); scene.add(sun);
+const hemi=new THREE.HemisphereLight(0x5a78b8,0x1c2230,.5); scene.add(hemi);
+const sun=new THREE.DirectionalLight(0xffb27a,2.6);  // low dawn Sun: warm sun.position.copy(SUN).multiplyScalar(20); scene.add(sun);
 
 /* ---- payload train (metres, payload box centre = origin) ---- */
 const BOX=[.25,.14,.175];
@@ -517,7 +530,7 @@ function partOf(o){ while(o){ if(o.userData.part) return o.userData.part; if(o.u
 
 /* =========================== Views =========================== */
 const VIEWS={
-  probe:{pos:new THREE.Vector3(1.05,.55,1.35),target:new THREE.Vector3(0,.05,0)},
+  probe:{pos:new THREE.Vector3(-1.45,.42,-.55),target:new THREE.Vector3(0,.12,0)},   // facing the sunrise (east)
   train:{pos:new THREE.Vector3(9,1.2,15),target:new THREE.Vector3(0,4.6,0)},
   inside:{pos:new THREE.Vector3(.16,.15,.17),target:new THREE.Vector3(-.02,-.012,0)},
   top:{pos:new THREE.Vector3(.02,2.6,.02),target:new THREE.Vector3(0,0,0)},
@@ -586,9 +599,9 @@ function overlayTexture(url,B,size,lw,mark){
     const [eu,ev]=P(TRACK.desc[TRACK.desc.length-1]); x.strokeStyle="#fff"; x.lineWidth=lw*1.2; x.beginPath(); x.moveTo(eu-mark,ev-mark); x.lineTo(eu+mark,ev+mark); x.moveTo(eu+mark,ev-mark); x.lineTo(eu-mark,ev+mark); x.stroke();
     const t=new THREE.CanvasTexture(c); t.anisotropy=8; t.generateMipmaps=true; res(t); }; im.onerror=()=>res(null); im.src=url; });
 }
-Promise.all([overlayTexture("wide.jpg",WIDE_B,2048,3,5),overlayTexture("near.jpg",NEAR_B,1024,3,6)]).then(([w,n])=>{
+Promise.all([overlayTexture("wide.jpg",WIDE_B,2048,3,5),overlayTexture("near.jpg",NEAR_B,1024,3,6),overlayTexture("wide_night.jpg",WIDE_B,2048,3,5)]).then(([w,n,wn])=>{
   if(!w||!n) return;
-  const u=skyMat.uniforms; u.tWide.value=w; u.tNear.value=n; u.uHasTex.value=1;
+  const u=skyMat.uniforms; u.tWide.value=w; u.tNear.value=n; u.tNightW.value=wn; u.uHasTex.value=1;
   u.uWideB.value.set(WIDE_B[0]*D2R,WIDE_B[1]*D2R,WIDE_B[2]*D2R,WIDE_B[3]*D2R);
   u.uNearB.value.set(NEAR_B[0]*D2R,NEAR_B[1]*D2R,NEAR_B[2]*D2R,NEAR_B[3]*D2R);
 });
@@ -711,8 +724,8 @@ function frame(){
   const ll=posAt(s); skyMat.uniforms.uLat0.value=ll[0]*D2R; skyMat.uniforms.uLon0.value=ll[1]*D2R;
   sky.position.copy(camera.position);
   const f=Math.exp(-camAlt/7500);
-  hemi.color.setRGB(.25+.45*f,.35+.45*f,.55+.4*f); hemi.intensity=.35+.45*f;
-  hemi.groundColor.setRGB(.35,.42,.5);
+  hemi.color.setRGB(.2+.2*f,.28+.22*f,.5+.2*f); hemi.intensity=.35+.2*f;
+  hemi.groundColor.setRGB(.12,.13,.18);
 
   const key=`${Math.round(t)}|${gpsAirborne}|${M.key}`;
   if(key!==lastHud){ updateHud(t,d); lastHud=key; }
