@@ -2136,6 +2136,24 @@ int main(void)
           WatchdogFeed();
         }
         printf("I2C: scan done, %d device(s). BMP390 is expected at 0x77 (or 0x76)\r\n", found);
+        if (found == 0)
+        {
+          /* Second try with the MCU's own weak pull-ups: an answer now means the wires are
+             fine and only the external pull-up resistor is missing. */
+          g.Pin = GPIO_PIN_8 | GPIO_PIN_9;
+          g.Mode = GPIO_MODE_AF_OD;
+          g.Pull = GPIO_PULLUP;
+          g.Speed = GPIO_SPEED_FREQ_LOW;
+          g.Alternate = GPIO_AF4_I2C1;
+          HAL_GPIO_Init(GPIOB, &g);
+          HAL_Delay(5);
+          int with_pull = HAL_I2C_IsDeviceReady(&hi2c1, BMP390_ADDR, 3, 20) == HAL_OK;
+          printf("I2C: with internal pull-ups the BMP390 %s\r\n",
+                 with_pull ? "ANSWERS - wires are fine, the pull-up resistor on SCL is missing"
+                           : "still does not answer - the SCL wire itself does not reach the module");
+          HAL_I2C_DeInit(&hi2c1);
+          HAL_I2C_Init(&hi2c1);
+        }
         next_ms = HAL_GetTick() + FRAME_PERIOD_MS;
       }
       else if (cmd == 'H' || cmd == 'h')
