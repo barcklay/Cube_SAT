@@ -66,12 +66,12 @@ PLACE = {
     # LEDs at the top edge (visible)
     "R10": (40.0, 9.0, 0), "D1": (40.0, 5.0, 0), "R11": (46.0, 9.0, 0), "D2": (46.0, 5.0, 0),
     # module sockets
-    "J7": (64.0, 6.0, 90),     # GPS: top edge, antenna cable leaves at the top
+    "J7": (68.5, 19.0, 270),   # GPS: body goes from the pin row up to the top edge, antenna cable leaves there
     "J9": (90.0, 22.0, 0),     # LoRa: right edge, far from the GPS antenna side
     "C14": (86.0, 20.0, 90),
     "J5": (8.0, 56.0, 0),      # IMU
-    "J6": (22.0, 70.0, 0),     # barometer
-    "J4": (8.0, 32.0, 0),      # SPI flash
+    "J6": (37.5, 22.0, 90),    # barometer: free on both sides of the row (which side its body takes is unknown)
+    "J4": (8.0, 44.7, 180),    # SPI flash, pin 1 at the bottom: its body must go inwards, not over the edge
     "J8": (14.0, 85.0, 90),    # DS18B20 probe connector at the edge (probe goes outside)
     "J10": (74.0, 86.0, 90),   # OLED (bench only)
     "J12": (89.5, 56.0, 0),    # expansion header: right edge, under the LoRa adapter
@@ -93,8 +93,8 @@ PLACE = {
 LABELS = {
     "J4": ("FLASH", "DI CLK GND DO CS 3V3", "L", True),
     "J5": ("IMU", "VCC GND SCLK SDI SDO CS INT1 INT2", "L", True),
-    "J6": ("BARO", "INT CS SDO SDI SCK VCC GND", "L", True),
-    "J7": ("GPS", "VCC GND TX RX PPS", "U", True),
+    "J6": ("BARO", "INT CS SDO SDI SCK VCC GND", "D", True),
+    "J7": ("GPS", "VCC GND TX RX PPS", "D", True),
     "J9": ("LORA", "3V3 GND NSS SCK MOSI MISO BUSY DIO1 NRST TXEN RXEN GND", "R", True),
     "J10": ("OLED", "GND VDD SCK SDA", "U", True),
     "J12": ("EXP", "VBAT! GND 3V3 A1 A2 A3 A4 PWM1 PWM2 GND", "R", True),
@@ -105,14 +105,21 @@ LABELS = {
 }
 TP_NAMES = ["3V3", "GND", "VBAT", "SCL", "SDA", "GTX", "GRX", "SCK1", "SCK3", "SCK2"]
 
-# Approximate plug-in module bodies (x, y, w, h in board mm) -> drawn on User.Drawings
-MODULE_BODIES = {
-    "GPS MAX-M10S": (58.0, 4.0, 26.0, 22.0),
-    "LoRa E22 adapter": (70.0, 18.0, 24.0, 34.0),
-    "IMU GY-601N1": (4.0, 52.0, 20.0, 22.0),
-    "BARO BMP390": (18.0, 66.0, 16.0, 16.0),
-    "FLASH": (4.0, 28.0, 20.0, 18.0),
+# Plug-in module boards, measured from photos of the real modules with the 2.54 mm pin pitch
+# as the ruler (2026-10-06): ref -> (name, length along the pin row, depth from the row,
+# side of the row the board takes when walking from pin 1 to the last pin: "R", "L" or
+# "both" when unknown, measured or guessed). The pin row sits ~1.2 mm inside one edge.
+# The LoRa adapter is not bought yet: its rectangle is a guess.
+MODULES = {
+    "J4": ("FLASH", 15.5, 14.0, "R", "measured"),
+    "J5": ("IMU GY-601N1", 20.1, 18.1, "L", "measured"),
+    "J6": ("BARO BMP390", 22.0, 11.0, "both", "measured, side unknown"),
+    "J7": ("GPS MAX-M10S", 13.5, 16.0, "R", "measured"),
+    "J9": ("LoRa E22 adapter", 34.0, 21.0, "R", "GUESS"),
 }
+ROW_INSET = 1.2
+# parts tall enough to hit a module board that sits ~8.5 mm up on its socket
+TALL = ["J1", "J2", "J8", "J11", "J3", "SW1", "J10", "J12"]
 
 
 def mm(v):
@@ -212,21 +219,62 @@ def main():
     if missing:
         sys.exit("missing footprints: %s" % missing)
 
-    # module body outlines + names on User.Drawings
-    for label, (x, y, w, h) in MODULE_BODIES.items():
+    # module body outlines on User.Drawings, computed from the real pad positions, and a check
+    # that no module board hangs over the edge or lands on another module or a tall part
+    def body_rect(ref):
+        name, length, depth, side, _ = MODULES[ref]
+        pads = sorted(board.FindFootprintByReference(ref).Pads(), key=lambda p: int(p.GetNumber()))
+        x1, y1 = pcbnew.ToMM(pads[0].GetPosition().x) - OX, pcbnew.ToMM(pads[0].GetPosition().y) - OY
+        x2, y2 = pcbnew.ToMM(pads[-1].GetPosition().x) - OX, pcbnew.ToMM(pads[-1].GetPosition().y) - OY
+        row = ((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5
+        dx, dy = (x2 - x1) / row, (y2 - y1) / row
+        rx, ry = -dy, dx                      # to the right of the walk from pin 1 to pin N
+        over = (length - row) / 2
+        lo = -(depth - ROW_INSET) if side in ("L", "both") else -ROW_INSET
+        hi = (depth - ROW_INSET) if side in ("R", "both") else ROW_INSET
+        pts = [(x1 - dx * over + rx * t, y1 - dy * over + ry * t) for t in (lo, hi)] + \
+              [(x2 + dx * over + rx * t, y2 + dy * over + ry * t) for t in (lo, hi)]
+        xs, ys = [q[0] for q in pts], [q[1] for q in pts]
+        return min(xs), min(ys), max(xs), max(ys)
+
+    def overlap(a, b):
+        return min(a[2], b[2]) - max(a[0], b[0]) > 0.2 and min(a[3], b[3]) - max(a[1], b[1]) > 0.2
+
+    bodies = {ref: body_rect(ref) for ref in MODULES}
+    problems = []
+    for ref, (x0, y0, x1, y1) in bodies.items():
+        name = MODULES[ref][0]
         rect = pcbnew.PCB_SHAPE(board)
         rect.SetShape(pcbnew.SHAPE_T_RECT)
-        rect.SetStart(pt(x, y))
-        rect.SetEnd(pt(x + w, y + h))
+        rect.SetStart(pt(x0, y0))
+        rect.SetEnd(pt(x1, y1))
         rect.SetLayer(pcbnew.Dwgs_User)
         rect.SetWidth(mm(0.15))
         board.Add(rect)
         txt = pcbnew.PCB_TEXT(board)
-        txt.SetText(label + " (module body, approx.)")
-        txt.SetPosition(pt(x + w / 2, y + h / 2))
+        txt.SetText("%s board (%s)" % (name, MODULES[ref][4]))
+        txt.SetPosition(pt((x0 + x1) / 2, (y0 + y1) / 2))
         txt.SetLayer(pcbnew.Dwgs_User)
-        txt.SetTextSize(pcbnew.VECTOR2I(mm(1.0), mm(1.0)))
+        txt.SetTextSize(pcbnew.VECTOR2I(mm(0.9), mm(0.9)))
         board.Add(txt)
+        if x0 < 0 or y0 < 0 or x1 > BOARD_W or y1 > BOARD_H:
+            problems.append("%s hangs over the board edge" % name)
+        for other, r2 in bodies.items():
+            if other > ref and overlap((x0, y0, x1, y1), r2):
+                problems.append("%s overlaps %s" % (name, MODULES[other][0]))
+        for t in TALL:
+            bb = board.FindFootprintByReference(t).GetBoundingBox(False, False)
+            r2 = (pcbnew.ToMM(bb.GetLeft()) - OX, pcbnew.ToMM(bb.GetTop()) - OY,
+                  pcbnew.ToMM(bb.GetRight()) - OX, pcbnew.ToMM(bb.GetBottom()) - OY)
+            if overlap((x0, y0, x1, y1), r2):
+                problems.append("%s sits over the tall part %s" % (name, t))
+        for h in ("H1", "H2", "H3", "H4"):
+            q = board.FindFootprintByReference(h).GetPosition()
+            hx, hy = pcbnew.ToMM(q.x) - OX, pcbnew.ToMM(q.y) - OY
+            if overlap((x0, y0, x1, y1), (hx - 3.5, hy - 3.5, hx + 3.5, hy + 3.5)):
+                problems.append("%s covers the mounting hole %s" % (name, h))
+        print("  %-18s x %5.1f..%5.1f  y %5.1f..%5.1f" % (name, x0, x1, y0, y1))
+    print("module fit: " + ("OK, no overlaps" if not problems else "; ".join(problems)))
 
     # silkscreen: module names, pin names, pin-1 marks, test point nets
     def silk(text, x, y, size=0.8, angle=0, just=0):

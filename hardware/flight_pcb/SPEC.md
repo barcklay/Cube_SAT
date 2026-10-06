@@ -139,6 +139,15 @@ and the bench stay one firmware.
   continuous (junction limit 125 C). The stability chart covers up to 22 uF on the output, so
   the LoRa bulk capacitor C14 went from 47 uF to 4.7 uF (about 20 uF in total on +3V3).
 
+- Module boards measured from photos of the real modules (2.54 mm pin pitch as the ruler):
+  flash 15.5 x 14 mm, IMU 20.1 x 18.1 mm, barometer 22 x 11 mm, GPS 13.5 x 16 mm. gen_pcb.py now
+  computes each module rectangle from the socket pads and refuses overlaps, tall parts under a
+  module, mounting holes and the board edge. Moved: flash socket turned round (its board would
+  have hung 5 mm over the edge), barometer to the top middle with room on both sides (which side
+  its board takes is not known), GPS next to it with its board towards the top edge.
+  Not measured: the LoRa adapter (not bought) and the OLED (bench only, hangs over the bottom edge).
+  Which side each board takes was read from photos: check with a 1:1 paper print before ordering.
+
 Still open from that review:
-real module outlines (GPS vs LoRa, IMU vs barometer), a separate STLINK-V3MINIE for programming,
+a 1:1 paper fit check of the modules, a separate STLINK-V3MINIE for programming,
 J9 pin order (adapter not bought yet).
