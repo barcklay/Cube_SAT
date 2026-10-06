@@ -39,13 +39,15 @@ def main():
         text = f"{time.time() - t0:7.1f} {s}"
         out.write(text + "\n")
         if not s.startswith("   st="):
-            print(text, flush=True)  # events also on the screen
+            print("\r" + text + " " * 20, flush=True)  # events also on the screen
     fd = None
     buf = b""
     import sys
     phase = sys.argv[1] if len(sys.argv) > 1 else "wait_bottom"
     rel_hist = []
     landed_at = None
+    last_rx = time.time()   # a USB hiccup can leave the port open but silent for ever
+    last_show = 0.0
     say("lift test started: go down to the ground floor and wait there")
     while time.time() - t0 < 25 * 60:
         if fd is None:
@@ -53,8 +55,14 @@ def main():
             if fd is None:
                 time.sleep(0.5)
                 continue
+            last_rx = time.time()
         r, _, _ = select.select([fd], [], [], 0.2)
         if not r:
+            if time.time() - last_rx > 3.0:
+                os.close(fd)
+                fd = None
+                say("!!! НЕТ СВЯЗИ С ПЛАТОЙ: 3 с без данных, переподключаюсь (no data, reopening the port)")
+                print("\a", end="", flush=True)
             continue
         try:
             chunk = os.read(fd, 4096)
@@ -66,6 +74,7 @@ def main():
             say("USB link lost")
             continue
         buf += chunk
+        last_rx = time.time()
         while b"\n" in buf:
             raw, buf = buf.split(b"\n", 1)
             line = raw.decode(errors="replace").strip()
@@ -84,6 +93,10 @@ def main():
             seq = int(line.split("seq=")[1].split()[0])
             if seq % 25 == 0:
                 say(f"   st={st:<9} h={h:+7.1f} vz={vz:+5.1f} rel={rel:+7.1f} ({phase})")
+            if now - last_show > 2.0:   # a live line on the screen: the link is seen to be alive
+                last_show = now
+                print(f"\r  связь есть · от старта {rel:+6.1f} м · {st:<9} · {int(now - t0) // 60}:{int(now - t0) % 60:02d}   ",
+                      end="", flush=True)
             if phase == "wait_bottom":
                 # the bottom = 50+ m below the start and 20 s without moving; a lift stopping
                 # on the way to pick people up is higher up and shorter
