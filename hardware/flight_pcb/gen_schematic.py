@@ -115,8 +115,9 @@ part("J3", "Connector:Conn_ST_STDC14", "STDC14 SWD+VCP",
      "Connector_PinHeader_1.27mm:PinHeader_2x07_P1.27mm_Vertical_SMD",
      {"1": None, "2": None, "3": "+3V3", "4": "SWDIO", "5": "GND", "6": "SWCLK", "7": "GND",
       "8": "SWO", "9": None, "10": None, "11": "GND", "12": "NRST",
-      "13": "VCP_TX", "14": "VCP_RX"}, "mcu",
-     "pin 13 VCP_RX (probe input) <- MCU TX; pin 14 VCP_TX -> MCU RX")
+      "13": "VCP_RX", "14": "VCP_TX"}, "mcu",
+     "STDC14 names are target-centred (UM2448, UM2505 table 14): pin 13 T_VCP_RX = target RX "
+     "(PA3), pin 14 T_VCP_TX = target TX (PA2)")
 
 # Pull-ups learned on the bench
 r("R4", "4.7k", "I2C_SCL", "+3V3", "pullups")
@@ -138,7 +139,9 @@ part("D2", "Device:LED", "GPS FIX blue", "LED_SMD:LED_0603_1608Metric",
 # switched on the low side from the battery rail so it is loud; beeps only after LANDED.
 part("Q2", "Transistor_FET:AO3400A", "AO3400A", "Package_TO_SOT_SMD:SOT-23",
      {"1": "BUZZER", "2": "GND", "3": "BUZ_N"}, "buzzer")
-r("R12", "100k", "BUZZER", "GND", "buzzer")  # keeps it silent during reset / boot
+# 4.7k, not 100k: after reset PB4 is NJTRST with a ~40k internal pull-up, which would lift a
+# 100k-pulled gate above the FET threshold and sound the buzzer during reset / in the bootloader
+r("R12", "4.7k", "BUZZER", "GND", "buzzer")
 part("D3", "Device:D", "1N4148W", "Diode_SMD:D_SOD-123",
      {"1": "VBAT_PROT", "2": "BUZ_N"}, "buzzer", "only needed if a magnetic buzzer is used")
 part("J11", "Connector_Generic:Conn_01x02", "BUZZER (+ / -)", XH.format(n=2),
