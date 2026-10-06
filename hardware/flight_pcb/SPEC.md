@@ -58,6 +58,8 @@ Linear: HW-24 (mounting the stack / own PCB), phase 3 HW-20.
 | PB0 | LED_ALIVE | LED + 1 kΩ | **NEW**, heartbeat |
 | PB1 | LED_FIX | LED + 1 kΩ | **NEW**, GPS fix |
 | PB4 | BUZZER | AO3400A low-side FET → 2-pin JST to the buzzer on the box wall | **NEW**, recovery beeper from the battery rail, only after LANDED; TIM3_CH1 if a passive buzzer is used |
+| PA1 / PA4 / PC0 / PC1 | EXP_A1…A4 | expansion header J12 | **NEW**, spare analog-capable pins (ADC) for what the tests ask for: more temperature probes, a sun sensor, a heater thermistor |
+| PB5 / PB7 | EXP_PWM1 / EXP_PWM2 | expansion header J12 | **NEW**, spare timer outputs (TIM3_CH2 / TIM4_CH2), e.g. a battery heater switch |
 
 The NEW pins are proposals: check in CubeMX that each one offers the needed function
 before the schematic is final, then add them to `hab_bringup.ioc` so the flight board

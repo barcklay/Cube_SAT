@@ -44,6 +44,9 @@ MCU_NETS = {
     "PC6": "LORA_BUSY", "PC8": "LORA_DIO1", "PC9": "LORA_NRST",
     "PB10": "LORA_TXEN", "PB11": "LORA_RXEN",
     "PA0": "VBAT_SENSE", "PB0": "LED_ALIVE", "PB1": "LED_FIX",
+    # spare pins on the expansion header J12: 4 analog-capable, 2 timer (PWM) outputs
+    "PA1": "EXP_A1", "PA4": "EXP_A2", "PC0": "EXP_A3", "PC1": "EXP_A4",
+    "PB5": "EXP_PWM1", "PB7": "EXP_PWM2",
 }
 MCU_POWER = {"VDD": "+3V3", "VBAT": "+3V3", "VSS": "GND", "VSSA": "GND",
              "VDDA": "+3V3A", "VREF+": "+3V3A"}
@@ -168,6 +171,14 @@ c("C14", "47u", "+3V3", "GND", "modules", C1206)
 part("J10", "Connector_Generic:Conn_01x04", "OLED SSD1306 (bench)", SOCK.format(n=4),
      {"1": "GND", "2": "+3V3", "3": "I2C_SCL", "4": "I2C_SDA"}, "modules",
      "order GND VDD SCK SDA as on the module (checked 2026-09-29)")
+
+# Expansion header: room for what the tests will ask for (more temperature probes, a battery
+# heater switch, a sun sensor...) without a new board. 3.3 V logic only on the EXP pins.
+part("J12", "Connector_Generic:Conn_01x10", "EXPANSION", SOCK.format(n=10),
+     {"1": "+3V3", "2": "GND", "3": "VBAT_PROT", "4": "EXP_A1", "5": "EXP_A2", "6": "EXP_A3",
+      "7": "EXP_A4", "8": "EXP_PWM1", "9": "EXP_PWM2", "10": "GND"}, "modules",
+     "A1..A4 = PA1 PA4 PC0 PC1 (ADC), PWM1/2 = PB5 PB7 (TIM3_CH2 / TIM4_CH2); "
+     "pin 3 is the battery rail, NOT 3.3 V")
 
 # Test points for the oscilloscope / logic analyzer
 for i, net in enumerate(["+3V3", "GND", "VBAT_PROT", "I2C_SCL", "I2C_SDA",
