@@ -129,6 +129,13 @@ and the bench stay one firmware.
 - Silkscreen: module name and every pin name at each socket, polarity at the JST connectors,
   net names at the test points.
 
-Still open from that review: the regulator (MIC5219 in SOT-23-5 is too small for LoRa TX),
+- Regulator: MIC5219 (SOT-23-5, ~117 mA from 7.2 V before overheating) replaced by
+  **LDL1117S33R** (ST, SOT-223, 2.5-18 V in, 1.2 A, low dropout, for ceramic output capacitors,
+  JLCPCB C435835); bypass capacitor C3 removed. Heat at 7.2 V in: 0.39 W at 100 mA average,
+  0.78 W during a 200 mA peak; the tab goes to the +3V3 plane. NOT yet verified from the
+  datasheet PDF (the ST site did not let it be downloaded here): pin order (taken as the LD1117:
+  1 GND, 2 + tab OUT, 3 IN), minimum output capacitance, thermal resistance of the package.
+
+Still open from that review:
 real module outlines (GPS vs LoRa, IMU vs barometer), a separate STLINK-V3MINIE for programming,
 J9 pin order (adapter not bought yet).

@@ -93,12 +93,14 @@ part("Q1", "Transistor_FET:AO3401A", "AO3401A", "Package_TO_SOT_SMD:SOT-23",
      {"1": "Q1_GATE", "2": "VBAT_PROT", "3": "VBAT_SW"}, "power",
      "reverse-polarity protection: body diode drain->source")
 r("R1", "10k", "Q1_GATE", "GND", "power")
-part("U2", "Regulator_Linear:MIC5219-3.3YM5", "MIC5219-3.3", None,
-     {"1": "VBAT_PROT", "2": "GND", "3": "VBAT_PROT", "4": "U2_BYP", "5": "+3V3"}, "power",
-     "provisional, decide after HW-21")
-c("C1", "10u", "VBAT_PROT", "GND", "power", C0805)
+# LDL1117S33R (ST, SOT-223, JLCPCB C435835): 2.5-18 V in, 1.2 A, low dropout, made for ceramic
+# output capacitors. Replaces the MIC5219 in SOT-23-5, which could carry only ~117 mA from
+# 7.2 V before overheating. Pinout as the LD1117 (KiCad symbol reused): 1 GND, 2+tab OUT, 3 IN.
+part("U2", "Regulator_Linear:LD1117S33TR_SOT223", "LDL1117S33R", None,
+     {"1": "GND", "2": "+3V3", "3": "VBAT_PROT"}, "power",
+     "CONFIRM the pin order against the LDL1117 datasheet before ordering")
+c("C1", "10u 16V", "VBAT_PROT", "GND", "power", C0805)
 c("C2", "10u", "+3V3", "GND", "power", C0805)
-c("C3", "470p", "U2_BYP", "GND", "power")
 # Battery voltage divider: 7.2 V fresh -> 2.3 V at the ADC
 r("R2", "100k", "VBAT_PROT", "VBAT_SENSE", "power")
 r("R3", "47k", "VBAT_SENSE", "GND", "power")

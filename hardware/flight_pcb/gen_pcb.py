@@ -42,7 +42,8 @@ PLACE = {
     # power, top-left
     "J1": (10.0, 13.0, 90), "J2": (10.0, 22.0, 90),
     "Q1": (19.0, 13.0, 0), "R1": (19.0, 17.5, 0),
-    "U2": (27.0, 13.0, 0), "C1": (27.0, 8.5, 0), "C2": (32.0, 13.0, 90), "C3": (27.0, 17.5, 0),
+    # regulator in SOT-223: pins on the left (GND, OUT, IN top to bottom), the big tab (OUT) on the right
+    "U2": (28.0, 14.0, 0), "C1": (23.5, 19.5, 0), "C2": (34.5, 14.0, 90),
     "R2": (19.0, 22.0, 0), "R3": (23.0, 22.0, 0),
     "F1": (18.0, 7.5, 0),      # battery fuse, right after the battery connector
     # MCU in the middle. Its pads are 5.7 mm from the centre; every VDD pin sits at a corner
