@@ -132,9 +132,12 @@ and the bench stay one firmware.
 - Regulator: MIC5219 (SOT-23-5, ~117 mA from 7.2 V before overheating) replaced by
   **LDL1117S33R** (ST, SOT-223, 2.5-18 V in, 1.2 A, low dropout, for ceramic output capacitors,
   JLCPCB C435835); bypass capacitor C3 removed. Heat at 7.2 V in: 0.39 W at 100 mA average,
-  0.78 W during a 200 mA peak; the tab goes to the +3V3 plane. NOT yet verified from the
-  datasheet PDF (the ST site did not let it be downloaded here): pin order (taken as the LD1117:
-  1 GND, 2 + tab OUT, 3 IN), minimum output capacitance, thermal resistance of the package.
+  0.78 W during a 200 mA peak; the tab goes to the +3V3 plane.
+  Checked against the datasheet DS12022 rev 7 (2026-10-06): pins 1 GND, 2 VOUT, 3 VIN, tab = VOUT;
+  input capacitor >= 1 uF, ceramic output capacitor, 4.7 uF suggested; thermal resistance
+  junction-to-ambient 120 C/W, so about +47 C at the 100 mA average and +94 C if 200 mA were
+  continuous (junction limit 125 C). The stability chart covers up to 22 uF on the output, so
+  the LoRa bulk capacitor C14 went from 47 uF to 4.7 uF (about 20 uF in total on +3V3).
 
 Still open from that review:
 real module outlines (GPS vs LoRa, IMU vs barometer), a separate STLINK-V3MINIE for programming,

@@ -9162,7 +9162,7 @@
 		)
 		(uuid "1101af99-2815-5dd5-8815-6995b47f26d6")
 	)
-	(text "CONFIRM the pin order against the LDL1117 datasheet before ordering"
+	(text "pin order checked against DS12022 rev 7 table 1: 1 GND, 2 VOUT, 3 VIN, tab = VOUT"
 		(exclude_from_sim no)
 		(at 271.78 190.5 0)
 		(effects
@@ -16084,7 +16084,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "47u"
+		(property "Value" "4.7u"
 			(at 408.94 374.65 0)
 			(effects
 				(font
@@ -16093,7 +16093,7 @@
 				(justify right)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_1206_3216Metric"
+		(property "Footprint" "Capacitor_SMD:C_0805_2012Metric"
 			(at 411.48 373.38 0)
 			(effects
 				(font

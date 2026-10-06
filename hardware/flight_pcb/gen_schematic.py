@@ -98,7 +98,7 @@ r("R1", "10k", "Q1_GATE", "GND", "power")
 # 7.2 V before overheating. Pinout as the LD1117 (KiCad symbol reused): 1 GND, 2+tab OUT, 3 IN.
 part("U2", "Regulator_Linear:LD1117S33TR_SOT223", "LDL1117S33R", None,
      {"1": "GND", "2": "+3V3", "3": "VBAT_PROT"}, "power",
-     "CONFIRM the pin order against the LDL1117 datasheet before ordering")
+     "pin order checked against DS12022 rev 7 table 1: 1 GND, 2 VOUT, 3 VIN, tab = VOUT")
 c("C1", "10u 16V", "VBAT_PROT", "GND", "power", C0805)
 c("C2", "10u", "+3V3", "GND", "power", C0805)
 # Battery voltage divider: 7.2 V fresh -> 2.3 V at the ADC
@@ -188,7 +188,9 @@ part("J9", "Connector_Generic:Conn_01x12", "LoRa E22-400M22S (adapter)", SOCK.fo
       "6": "SPI2_MISO", "7": "LORA_BUSY", "8": "LORA_DIO1", "9": "LORA_NRST",
       "10": "LORA_TXEN", "11": "LORA_RXEN", "12": "GND"}, "modules",
      "rev A: E22 on a header until HW-6 is done")
-c("C14", "47u", "+3V3", "GND", "modules", C1206)
+# 4.7u, not 47u: the LDL1117 stability chart (DS12022 fig. 20/21) covers up to 22 uF on the
+# output; C2 10u + C10 4.7u + this 4.7u + the 100n caps stay inside it
+c("C14", "4.7u", "+3V3", "GND", "modules", C0805)
 part("J10", "Connector_Generic:Conn_01x04", "OLED SSD1306 (bench)", SOCK.format(n=4),
      {"1": "GND", "2": "+3V3", "3": "I2C_SCL", "4": "I2C_SDA"}, "modules",
      "order GND VDD SCK SDA as on the module (checked 2026-09-29)")
