@@ -43,7 +43,7 @@ RE_BMP = re.compile(r"^T=(-?[\d.]+) C\s+P=(-?[\d.]+) Pa\s+alt=(-?[\d.]+) m\s+rel
 RE_HEALTH = re.compile(r"^HEALTH: (\S+) (lost|back)")
 RE_FLT = re.compile(r"\| FLT st=(\w+) h=(-?[\d.]+) vz=(-?[\d.]+) asl=(-?[\d.]+) src=(\w+)( SIM)?")
 # One-off messages of the flight state machine (HW-18), shown as they come.
-EVENT_PREFIXES = ("STATE:", "SIM:", "ALT:", "FLIGHT:", "TEST:", "LORA:")
+EVENT_PREFIXES = ("STATE:", "SIM:", "ALT:", "FLIGHT:", "TEST:", "LORA:", "I2C:")
 STATE_COLOUR = {"PRELAUNCH": DIM, "ASCENT": GREEN, "FLOAT": CYAN, "BURST": RED, "DESCENT": YELLOW,
                 "LANDED": MAGENTA}
 

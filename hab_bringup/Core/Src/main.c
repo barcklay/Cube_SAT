@@ -2098,6 +2098,46 @@ int main(void)
         LoraCheck();
         next_ms = HAL_GetTick() + FRAME_PERIOD_MS;
       }
+      else if (cmd == 'I' || cmd == 'i')
+      {
+        /* I2C line check: with the internal pull-down and then pull-up, does the line follow
+           the MCU (nothing connected), stay high (module pull-up present) or stay low (shorted)? */
+        GPIO_InitTypeDef g = {0};
+        const uint16_t pins[2] = {GPIO_PIN_8, GPIO_PIN_9};
+        const char *names[2] = {"SCL (PB8, D15)", "SDA (PB9, D14)"};
+        WatchdogFeed();
+        HAL_I2C_DeInit(&hi2c1);
+        for (int i = 0; i < 2; i++)
+        {
+          g.Pin = pins[i];
+          g.Mode = GPIO_MODE_INPUT;
+          g.Pull = GPIO_PULLDOWN;
+          HAL_GPIO_Init(GPIOB, &g);
+          HAL_Delay(5);
+          int low = HAL_GPIO_ReadPin(GPIOB, pins[i]) == GPIO_PIN_SET;
+          g.Pull = GPIO_PULLUP;
+          HAL_GPIO_Init(GPIOB, &g);
+          HAL_Delay(5);
+          int high = HAL_GPIO_ReadPin(GPIOB, pins[i]) == GPIO_PIN_SET;
+          printf("I2C: %s reads %d with pull-down, %d with pull-up - %s\r\n", names[i], low, high,
+                 (low && high) ? "held high: a module with pull-ups is connected"
+                 : (!low && !high) ? "STUCK LOW: shorted to GND or another wire sits on this line"
+                 : "FLOATING: nothing is connected to this pin");
+        }
+        HAL_I2C_Init(&hi2c1);
+        int found = 0;
+        for (uint16_t a = 0x08; a < 0x78; a++)
+        {
+          if (HAL_I2C_IsDeviceReady(&hi2c1, (uint16_t)(a << 1), 1, 5) == HAL_OK)
+          {
+            printf("I2C: device answers at 0x%02X\r\n", a);
+            found++;
+          }
+          WatchdogFeed();
+        }
+        printf("I2C: scan done, %d device(s). BMP390 is expected at 0x77 (or 0x76)\r\n", found);
+        next_ms = HAL_GetTick() + FRAME_PERIOD_MS;
+      }
       else if (cmd == 'H' || cmd == 'h')
       {
         printf("TEST: hanging the loop on purpose, the watchdog should reset the board in ~2 s\r\n");
