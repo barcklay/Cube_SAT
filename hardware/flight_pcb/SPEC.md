@@ -39,7 +39,8 @@ Linear: HW-24 (mounting the stack / own PCB), phase 3 HW-20.
 | PB3 | SWO | STDC14 | optional trace |
 | NRST | reset | STDC14 + 100 nF to GND + button | |
 | PA2 / PA3 | LPUART1 TX / RX | STDC14 VCP pins | console 115200 |
-| PB8 (BOOT0) | I2C1_SCL | barometer SCK, spare I2C header | **4.7 kΩ pull-up to 3V3 on the board** (the module has none on SCK). BOOT0 pin is ignored: option bytes nSWBOOT0 = 0, nBOOT0 = 1 → always boots from flash |
+| PA15 | I2C1_SCL | barometer SCK, spare I2C header | **4.7 kΩ pull-up to 3V3 on the board** (the module has none on SCK). **Differs from the Nucleo bench, where SCL is on PB8**: the flight build of the firmware must use PA15 (AF4) |
+| PB8 (BOOT0) | not used | 10 kΩ pull-down | BOOT0 held low, so the board always boots from flash, also with factory option bytes |
 | PB9 | I2C1_SDA | barometer SDI, spare I2C header | 4.7 kΩ pull-up to 3V3 |
 | PA5 / PA6 / PA7 | SPI1 SCK / MISO / MOSI | flash CLK / DO / DI | flash **alone** on SPI1 |
 | PB6 | FLASH_CS | flash CS | 10 kΩ pull-up (idle high) |
@@ -58,8 +59,8 @@ Linear: HW-24 (mounting the stack / own PCB), phase 3 HW-20.
 | PB0 | LED_ALIVE | LED + 1 kΩ | **NEW**, heartbeat |
 | PB1 | LED_FIX | LED + 1 kΩ | **NEW**, GPS fix |
 | PB4 | BUZZER | AO3400A low-side FET → 2-pin JST to the buzzer on the box wall | **NEW**, recovery beeper from the battery rail, only after LANDED; TIM3_CH1 if a passive buzzer is used |
-| PA1 / PA4 / PC0 / PC1 | EXP_A1…A4 | expansion header J12 | **NEW**, spare analog-capable pins (ADC) for what the tests ask for: more temperature probes, a sun sensor, a heater thermistor |
-| PB5 / PB7 | EXP_PWM1 / EXP_PWM2 | expansion header J12 | **NEW**, spare timer outputs (TIM3_CH2 / TIM4_CH2), e.g. a battery heater switch |
+| PA1 / PA4 / PC0 / PC1 | EXP_A1…A4 | expansion header J12 through 1 kΩ | **NEW**, spare analog-capable pins (ADC): more temperature probes, a sun sensor, a heater thermistor |
+| PB5 / PB7 | EXP_PWM1 / EXP_PWM2 | expansion header J12 through 1 kΩ | **NEW**, spare timer outputs (TIM3_CH2 / TIM4_CH2), e.g. a battery heater switch |
 
 The NEW pins are proposals: check in CubeMX that each one offers the needed function
 before the schematic is final, then add them to `hab_bringup.ioc` so the flight board
@@ -114,3 +115,20 @@ and the bench stay one firmware.
 5. Gerbers + BOM + CPL → JLCPCB order (PCBA for MCU and passives; headers and modules by hand).
 6. Bring-up of the new board with the same firmware; then HW-24 check: the full stack
    works after the move.
+
+## Changes after the independent review of 2026-10-06 (review/2026-10-06_fresh_eyes_review.md)
+
+- STDC14 console pins 13/14 were swapped: fixed (pin 13 = target RX = PA3, pin 14 = target TX = PA2).
+- Buzzer gate pull-down 100 k -> 4.7 k (PB4 has an internal pull-up during reset).
+- Resettable fuses: F1 0.5 A on the battery input, F2 0.2 A on the buzzer cable.
+- DS18B20 cable: 100 Ω in series with its 3V3 and with the data line.
+- Expansion header J12: battery rail moved to pin 1 with GND next to it, 1 kΩ in series with every signal.
+- I2C SCL moved from PB8 (BOOT0) to PA15; PB8 pulled down.
+- 100 nF moved to 2 mm from every VDD pin; 100 nF at NRST and at VDDA/VREF+ next to the pins.
+- 100 k pull-downs on LORA_TXEN / LORA_RXEN.
+- Silkscreen: module name and every pin name at each socket, polarity at the JST connectors,
+  net names at the test points.
+
+Still open from that review: the regulator (MIC5219 in SOT-23-5 is too small for LoRa TX),
+real module outlines (GPS vs LoRa, IMU vs barometer), a separate STLINK-V3MINIE for programming,
+J9 pin order (adapter not bought yet).

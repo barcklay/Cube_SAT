@@ -43,18 +43,25 @@ PLACE = {
     "J1": (10.0, 13.0, 90), "J2": (10.0, 22.0, 90),
     "Q1": (19.0, 13.0, 0), "R1": (19.0, 17.5, 0),
     "U2": (27.0, 13.0, 0), "C1": (27.0, 8.5, 0), "C2": (32.0, 13.0, 90), "C3": (27.0, 17.5, 0),
-    "R2": (19.0, 22.0, 0), "R3": (23.0, 22.0, 0), "C4": (27.0, 22.0, 0),
-    # MCU in the middle with its decoupling close to the pins
+    "R2": (19.0, 22.0, 0), "R3": (23.0, 22.0, 0),
+    "F1": (18.0, 7.5, 0),      # battery fuse, right after the battery connector
+    # MCU in the middle. Its pads are 5.7 mm from the centre; every VDD pin sits at a corner
+    # (16, 32, 48, 64), so one 100 nF goes into each corner, 2 mm from its pin.
     "U1": (48.0, 45.0, 0),
-    "C5": (40.0, 37.0, 45), "C6": (56.0, 37.0, 135), "C7": (40.0, 53.0, 135), "C8": (56.0, 53.0, 45),
-    "C9": (48.0, 36.0, 0), "C10": (48.0, 56.0, 0),
-    # VDDA filter right under the VDDA pins 28/29 (bottom edge of U1)
-    "C12": (51.5, 56.5, 90), "C11": (53.5, 56.5, 90), "FB1": (55.5, 56.5, 90),
+    "C5": (42.0, 39.0, 225), "C6": (54.0, 39.0, 135), "C7": (42.0, 51.0, 315), "C8": (54.0, 51.0, 45),
+    "C9": (39.6, 41.3, 270),    # VBAT pin 1
+    "C15": (39.6, 44.3, 270),   # NRST pin 7
+    "C4": (37.0, 47.0, 90),    # battery-sense filter at PA0 (pin 12), not at the divider
+    "C10": (45.5, 57.0, 0),
+    # VDDA filter: 100 nF right under VSSA/VREF+/VDDA (pins 27..29), then 1 uF, then the bead
+    "C12": (50.5, 53.4, 180), "C11": (50.5, 55.2, 180), "FB1": (53.2, 54.4, 90),
+    "R13": (45.0, 35.5, 90),   # BOOT0 (PB8, pin 61) pull-down
     # programming connector + reset at the bottom edge
     "J3": (48.0, 80.0, 0), "SW1": (63.0, 82.0, 0), "C13": (56.0, 76.0, 0),
     # pull-ups next to the MCU
     "R4": (35.0, 60.0, 90), "R5": (37.0, 60.0, 90), "R6": (39.0, 60.0, 90),
     "R7": (33.0, 45.0, 90), "R8": (33.0, 49.0, 90), "R9": (64.0, 52.0, 90),
+    "R22": (66.5, 55.0, 90), "R23": (68.5, 55.0, 90),
     # LEDs at the top edge (visible)
     "R10": (40.0, 9.0, 0), "D1": (40.0, 5.0, 0), "R11": (46.0, 9.0, 0), "D2": (46.0, 5.0, 0),
     # module sockets
@@ -66,14 +73,36 @@ PLACE = {
     "J4": (8.0, 32.0, 0),      # SPI flash
     "J8": (14.0, 85.0, 90),    # DS18B20 probe connector at the edge (probe goes outside)
     "J10": (74.0, 86.0, 90),   # OLED (bench only)
-    "J12": (91.0, 56.0, 0),    # expansion header: right edge, under the LoRa adapter
+    "J12": (89.5, 56.0, 0),    # expansion header: right edge, under the LoRa adapter
+    "R16": (85.5, 63.62, 0), "R17": (85.5, 66.16, 0), "R18": (85.5, 68.70, 0),
+    "R19": (85.5, 71.24, 0), "R20": (85.5, 73.78, 0), "R21": (85.5, 76.32, 0),
+    "R14": (14.0, 74.0, 0), "R15": (14.0, 76.2, 0),   # DS18B20 cable protection
     # recovery buzzer: cable connector at the bottom edge, FET and parts next to it
     "J11": (30.0, 86.0, 90), "Q2": (37.0, 81.0, 0), "R12": (37.0, 77.0, 0), "D3": (41.0, 84.0, 90),
+    "F2": (33.5, 78.0, 90),
     # test points along the bottom-right
     "TP1": (70.0, 60.0, 0), "TP2": (74.0, 60.0, 0), "TP3": (78.0, 60.0, 0),
     "TP4": (70.0, 64.0, 0), "TP5": (74.0, 64.0, 0), "TP6": (78.0, 64.0, 0),
     "TP7": (70.0, 68.0, 0), "TP8": (74.0, 68.0, 0), "TP9": (78.0, 68.0, 0), "TP10": (82.0, 68.0, 0),
 }
+
+# Silkscreen: what plugs in where and which way round. ref -> (name, pin names in pin order,
+# side of the pin row the names go to: L/R for a vertical row, U/D for a horizontal one,
+# per_pin). JST connectors (per_pin False) get one line along the connector instead.
+LABELS = {
+    "J4": ("FLASH", "DI CLK GND DO CS 3V3", "L", True),
+    "J5": ("IMU", "VCC GND SCLK SDI SDO CS INT1 INT2", "L", True),
+    "J6": ("BARO", "INT CS SDO SDI SCK VCC GND", "L", True),
+    "J7": ("GPS", "VCC GND TX RX PPS", "U", True),
+    "J9": ("LORA", "3V3 GND NSS SCK MOSI MISO BUSY DIO1 NRST TXEN RXEN GND", "R", True),
+    "J10": ("OLED", "GND VDD SCK SDA", "U", True),
+    "J12": ("EXP", "VBAT! GND 3V3 A1 A2 A3 A4 PWM1 PWM2 GND", "R", True),
+    "J1": ("BATTERY", "+ GND", "L", False),
+    "J2": ("SWITCH", "", "L", False),
+    "J8": ("TEMP", "3V3 DQ GND", "U", False),
+    "J11": ("BUZZER", "+ -", "U", False),
+}
+TP_NAMES = ["3V3", "GND", "VBAT", "SCL", "SDA", "GTX", "GRX", "SCK1", "SCK3", "SCK2"]
 
 # Approximate plug-in module bodies (x, y, w, h in board mm) -> drawn on User.Drawings
 MODULE_BODIES = {
@@ -197,6 +226,53 @@ def main():
         txt.SetLayer(pcbnew.Dwgs_User)
         txt.SetTextSize(pcbnew.VECTOR2I(mm(1.0), mm(1.0)))
         board.Add(txt)
+
+    # silkscreen: module names, pin names, pin-1 marks, test point nets
+    def silk(text, x, y, size=0.8, angle=0, just=0):
+        t = pcbnew.PCB_TEXT(board)
+        t.SetText(text)
+        t.SetPosition(pcbnew.VECTOR2I(x, y))
+        t.SetLayer(pcbnew.F_SilkS)
+        t.SetTextSize(pcbnew.VECTOR2I(mm(size), mm(size)))
+        t.SetTextThickness(mm(size * 0.16))
+        t.SetTextAngleDegrees(angle)
+        t.SetHorizJustify((pcbnew.GR_TEXT_H_ALIGN_CENTER, pcbnew.GR_TEXT_H_ALIGN_LEFT,
+                           pcbnew.GR_TEXT_H_ALIGN_RIGHT)[just])
+        board.Add(t)
+
+    for ref, (name, pins, side, per_pin) in LABELS.items():
+        fp = board.FindFootprintByReference(ref)
+        fp.Reference().SetVisible(False)  # the name printed next to it says more than "J6"
+        pads = sorted(fp.Pads(), key=lambda p: int(p.GetNumber()))
+        pos = [p.GetPosition() for p in pads]
+        names = pins.split()
+        vertical = abs(pos[-1].y - pos[0].y) > abs(pos[-1].x - pos[0].x)
+        sign = -1 if side in "LU" else 1
+        if per_pin:
+            for q, pin_name in zip(pos, names):
+                if vertical:    # names read left to right, next to each pin
+                    silk(pin_name, q.x + sign * mm(1.9), q.y, 0.8, 0, 2 if sign < 0 else 1)
+                else:           # names read bottom to top, above or below each pin
+                    silk(pin_name, q.x, q.y + sign * mm(1.9), 0.8, 90, 1 if sign < 0 else 2)
+            # module name beyond pin 1, where the row begins
+            dx, dy = pos[0].x - pos[1].x, pos[0].y - pos[1].y
+            k = mm(3.8) / (abs(dx) + abs(dy))
+            silk(name, pos[0].x + int(dx * k), pos[0].y + int(dy * k), 1.0)
+        else:
+            # one line along the connector: "NAME: a b" in the physical order of the pins
+            order = sorted(zip(pos, names + [""] * len(pos)),
+                           key=lambda t: -t[0].y if vertical else t[0].x)
+            text = name + (": " + " ".join(n for _, n in order) if names else "")
+            cx = sum(q.x for q in pos) // len(pos)
+            cy = sum(q.y for q in pos) // len(pos)
+            if vertical:
+                silk(text, cx + sign * mm(4.6), cy, 0.8, 90)
+            else:
+                silk(text, cx, cy + sign * mm(4.6), 0.8)
+    for i, tp_name in enumerate(TP_NAMES, 1):
+        q = board.FindFootprintByReference("TP%d" % i).GetPosition()
+        board.FindFootprintByReference("TP%d" % i).Reference().SetVisible(False)
+        silk(tp_name, q.x, q.y + mm(1.85), 0.8)
 
     # silkscreen title
     title = pcbnew.PCB_TEXT(board)

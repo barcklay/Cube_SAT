@@ -31,7 +31,7 @@ JARS = sorted(glob.glob(os.path.expanduser("~/.local/share/freerouting/freerouti
 PASSES = 100
 
 # Battery and buzzer currents (E22 TX peaks ~120 mA): wider tracks. GND and +3V3 are planes.
-POWER_NETS = ["/VBAT_RAW", "/VBAT_SW", "/VBAT_PROT", "/BUZ_N", "+3V3"]  # names as in the board
+POWER_NETS = ["/VBAT_IN", "/VBAT_RAW", "/VBAT_SW", "/VBAT_PROT", "/BUZ_P", "/BUZ_N", "+3V3"]  # names as in the board
 
 
 def mm(v):

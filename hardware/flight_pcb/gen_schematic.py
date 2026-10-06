@@ -32,7 +32,10 @@ MCU_NETS = {
     "PA13": "SWDIO", "PA14": "SWCLK", "PB3": "SWO",
     "PG10": "NRST",                                   # pin 7 = PG10-NRST (named "PG10" in KiCad)
     "PA2": "VCP_TX", "PA3": "VCP_RX",                 # LPUART1 console
-    "PB8": "I2C_SCL", "PB9": "I2C_SDA",               # barometer, OLED
+    # I2C1_SCL is on PA15, not on PB8 as on the Nucleo bench: PB8 is BOOT0, and a pull-up there
+    # makes a factory-fresh chip start its ROM bootloader. PB8 is pulled down instead (R13).
+    "PA15": "I2C_SCL", "PB9": "I2C_SDA",              # barometer, OLED
+    "PB8": "BOOT0",
     "PA5": "SPI1_SCK", "PA6": "SPI1_MISO", "PA7": "SPI1_MOSI", "PB6": "FLASH_CS",
     "PC10": "SPI3_SCK", "PC11": "SPI3_MISO", "PC12": "SPI3_MOSI", "PC7": "IMU_CS",
     "PB2": "IMU_INT1",
@@ -80,7 +83,10 @@ def c(ref, value, a, b, block, fp=C0603):
 
 # Power: battery -> external switch -> reverse-polarity P-FET -> LDO 3.3 V
 part("J1", "Connector_Generic:Conn_01x02", "BATTERY 4xL91", XH.format(n=2),
-     {"1": "VBAT_RAW", "2": "GND"}, "power")
+     {"1": "VBAT_IN", "2": "GND"}, "power")
+# resettable fuse: a pinched cable or a shorted part must not short the battery pack
+part("F1", "Device:Polyfuse", "PTC 0.5A hold", "Fuse:Fuse_1206_3216Metric",
+     {"1": "VBAT_IN", "2": "VBAT_RAW"}, "power")
 part("J2", "Connector_Generic:Conn_01x02", "POWER SWITCH (on the box)", XH.format(n=2),
      {"1": "VBAT_RAW", "2": "VBAT_SW"}, "power")
 part("Q1", "Transistor_FET:AO3401A", "AO3401A", "Package_TO_SOT_SMD:SOT-23",
@@ -106,7 +112,9 @@ part("FB1", "Device:FerriteBead_Small", "600R@100MHz", "Inductor_SMD:L_0603_1608
      {"1": "+3V3", "2": "+3V3A"}, "mcu")
 c("C11", "1u", "+3V3A", "GND", "mcu")
 c("C12", "100n", "+3V3A", "GND", "mcu")
-c("C13", "100n", "NRST", "GND", "mcu")
+c("C13", "100n", "NRST", "GND", "mcu")   # at the reset button
+c("C15", "100n", "NRST", "GND", "mcu")   # at the MCU pin: the NRST track is long
+r("R13", "10k", "BOOT0", "GND", "mcu")   # always boot from flash, whatever the option bytes say
 part("SW1", "Switch:SW_Push", "RESET", "Button_Switch_SMD:SW_SPST_TL3342",
      {"1": "NRST", "2": "GND"}, "mcu")
 
@@ -126,6 +134,8 @@ r("R6", "4.7k", "DS18B20_DQ", "+3V3", "pullups")
 r("R7", "10k", "FLASH_CS", "+3V3", "pullups")
 r("R8", "10k", "IMU_CS", "+3V3", "pullups")
 r("R9", "10k", "LORA_NSS", "+3V3", "pullups")
+r("R22", "100k", "LORA_TXEN", "GND", "pullups")   # antenna switch off while the MCU is in reset
+r("R23", "100k", "LORA_RXEN", "GND", "pullups")
 
 # LEDs
 r("R10", "1k", "LED_ALIVE", "LED1_A", "leds")
@@ -143,9 +153,12 @@ part("Q2", "Transistor_FET:AO3400A", "AO3400A", "Package_TO_SOT_SMD:SOT-23",
 # 100k-pulled gate above the FET threshold and sound the buzzer during reset / in the bootloader
 r("R12", "4.7k", "BUZZER", "GND", "buzzer")
 part("D3", "Device:D", "1N4148W", "Diode_SMD:D_SOD-123",
-     {"1": "VBAT_PROT", "2": "BUZ_N"}, "buzzer", "only needed if a magnetic buzzer is used")
+     {"1": "BUZ_P", "2": "BUZ_N"}, "buzzer", "only needed if a magnetic buzzer is used")
+# the buzzer cable leaves the box: its own small fuse, so a pinched cable does not end the flight
+part("F2", "Device:Polyfuse", "PTC 0.2A hold", "Fuse:Fuse_1206_3216Metric",
+     {"1": "VBAT_PROT", "2": "BUZ_P"}, "buzzer")
 part("J11", "Connector_Generic:Conn_01x02", "BUZZER (+ / -)", XH.format(n=2),
-     {"1": "VBAT_PROT", "2": "BUZ_N"}, "buzzer", "pin 1 = buzzer +, pin 2 = buzzer -")
+     {"1": "BUZ_P", "2": "BUZ_N"}, "buzzer", "pin 1 = buzzer +, pin 2 = buzzer -")
 
 # Module headers (female sockets on the board)
 part("J4", "Connector_Generic:Conn_01x06", "SPI FLASH module", SOCK.format(n=6),
@@ -164,7 +177,10 @@ part("J7", "Connector_Generic:Conn_01x05", "GPS MAX-M10S", SOCK.format(n=5),
      {"1": "+3V3", "2": "GND", "3": "USART1_RX", "4": "USART1_TX", "5": "GPS_PPS"}, "modules",
      "order VCC GND TX RX PPS as on the module (checked 2026-09-29); module TX -> MCU RX")
 part("J8", "Connector_Generic:Conn_01x03", "DS18B20 probe", XH.format(n=3),
-     {"1": "+3V3", "2": "DS18B20_DQ", "3": "GND"}, "modules", "red / yellow / black")
+     {"1": "DS_VCC", "2": "DS_DQ", "3": "GND"}, "modules", "red / yellow / black")
+# the probe cable leaves the box: a short on it must not pull the 3V3 rail down or hit PA10 directly
+r("R14", "100", "+3V3", "DS_VCC", "modules")
+r("R15", "100", "DS18B20_DQ", "DS_DQ", "modules")
 part("J9", "Connector_Generic:Conn_01x12", "LoRa E22-400M22S (adapter)", SOCK.format(n=12),
      {"1": "+3V3", "2": "GND", "3": "LORA_NSS", "4": "SPI2_SCK", "5": "SPI2_MOSI",
       "6": "SPI2_MISO", "7": "LORA_BUSY", "8": "LORA_DIO1", "9": "LORA_NRST",
@@ -178,10 +194,12 @@ part("J10", "Connector_Generic:Conn_01x04", "OLED SSD1306 (bench)", SOCK.format(
 # Expansion header: room for what the tests will ask for (more temperature probes, a battery
 # heater switch, a sun sensor...) without a new board. 3.3 V logic only on the EXP pins.
 part("J12", "Connector_Generic:Conn_01x10", "EXPANSION", SOCK.format(n=10),
-     {"1": "+3V3", "2": "GND", "3": "VBAT_PROT", "4": "EXP_A1", "5": "EXP_A2", "6": "EXP_A3",
-      "7": "EXP_A4", "8": "EXP_PWM1", "9": "EXP_PWM2", "10": "GND"}, "modules",
-     "A1..A4 = PA1 PA4 PC0 PC1 (ADC), PWM1/2 = PB5 PB7 (TIM3_CH2 / TIM4_CH2); "
-     "pin 3 is the battery rail, NOT 3.3 V")
+     {"1": "VBAT_PROT", "2": "GND", "3": "+3V3", "4": "X_A1", "5": "X_A2", "6": "X_A3",
+      "7": "X_A4", "8": "X_PWM1", "9": "X_PWM2", "10": "GND"}, "modules",
+     "A1..A4 = PA1 PA4 PC0 PC1 (ADC), PWM1/2 = PB5 PB7 (TIM3_CH2 / TIM4_CH2), each through 1k; "
+     "pin 1 is the battery rail, NOT 3.3 V (GND sits between it and the rest)")
+for i, sig in enumerate(["A1", "A2", "A3", "A4", "PWM1", "PWM2"]):
+    r(f"R{16 + i}", "1k", f"EXP_{sig}", f"X_{sig}", "modules")
 
 # Test points for the oscilloscope / logic analyzer
 for i, net in enumerate(["+3V3", "GND", "VBAT_PROT", "I2C_SCL", "I2C_SDA",
