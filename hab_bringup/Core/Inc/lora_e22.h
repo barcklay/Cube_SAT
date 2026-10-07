@@ -14,6 +14,7 @@
 
 #include "main.h"
 #include <stdio.h>
+#include "telemetry_packet.h"
 
 #define LORA_NSS_PORT GPIOB
 #define LORA_NSS_PIN GPIO_PIN_12
@@ -207,6 +208,190 @@ static int LoraCheck(void)
   printf("LORA: FAIL - status reads but data is wrong. Check: MOSI (PB15) and SCK (PB13), "
          "then MISO (PB14)\r\n");
   return 0;
+}
+
+
+/* ---------------------------------------------------------------------------------------
+ * Radio link (HW-6 / HW-13). WRITTEN AND COMPILED, NOT YET RUN ON THE AIR: there is one
+ * module on the bench and nobody to receive. LoraRadioSetup() does not transmit and can be
+ * run at any time; LoraSend() transmits: antenna on, and only with the second module ready.
+ *
+ * The module is an SX1268 with a 32 MHz TCXO fed from DIO3 (E22-400M22S manual, 4.2) and an
+ * antenna switch driven by TXEN / RXEN. Commands are those of the Semtech SX1261/2/8
+ * datasheet, chapter 13.
+ * ------------------------------------------------------------------------------------- */
+#define LORA_FREQ_HZ      434500000UL  /* inside 433.05-434.79 MHz; CONFIRM the Thai (NBTC) rules */
+#define LORA_SF           9U           /* spreading factor 9, 125 kHz, coding rate 4/5: */
+#define LORA_BW           0x04U        /* a 28-byte packet is on the air for about 0.2 s */
+#define LORA_CR           0x01U
+#define LORA_PREAMBLE     8U
+#define LORA_TX_DBM_BENCH (-9)         /* lowest power the chip has: two modules on one table */
+#define LORA_TCXO_1V8     0x02U        /* TCXO supply from DIO3; 1.8 V is the usual value for E22
+                                          modules (from memory, not in the Ebyte manual) */
+
+#define SX_IRQ_TX_DONE  0x0001U
+#define SX_IRQ_RX_DONE  0x0002U
+#define SX_IRQ_CRC_ERR  0x0040U
+#define SX_IRQ_TIMEOUT  0x0200U
+
+static void LoraCmd(const uint8_t *tx, uint16_t n)
+{
+  uint8_t rx[16];
+  LoraWaitReady(50);
+  LoraXfer(tx, rx, n);
+}
+
+static void LoraSwitch(int tx_on, int rx_on)
+{
+  HAL_GPIO_WritePin(LORA_SW_PORT, LORA_TXEN_PIN, tx_on ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(LORA_SW_PORT, LORA_RXEN_PIN, rx_on ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+
+static uint16_t LoraIrq(void)
+{
+  const uint8_t tx[4] = {0x12, 0, 0, 0};   /* GetIrqStatus */
+  uint8_t rx[4] = {0};
+  LoraWaitReady(50);
+  LoraXfer(tx, rx, 4);
+  return (uint16_t)((rx[2] << 8) | rx[3]);
+}
+
+static void LoraPacketParams(uint8_t len)
+{
+  const uint8_t tx[7] = {0x8C, 0x00, LORA_PREAMBLE, 0x00 /* explicit header */, len,
+                         0x01 /* CRC on */, 0x00 /* normal IQ */};
+  LoraCmd(tx, 7);
+}
+
+/* Configure the radio for our link. Nothing is transmitted. Returns the chip's error word
+   (GetDeviceErrors): 0 = the TCXO started and every calibration passed. */
+static uint16_t LoraRadioSetup(int8_t tx_dbm)
+{
+  if (!lora_inited)
+  {
+    LoraInit();
+  }
+  LoraSwitch(0, 0);
+  LoraReset();
+  LoraWaitReady(20);
+  {
+    const uint8_t standby[2] = {0x80, 0x00};                         /* SetStandby(RC) */
+    const uint8_t clr_err[3] = {0x07, 0x00, 0x00};                   /* ClearDeviceErrors */
+    const uint8_t tcxo[5] = {0x97, LORA_TCXO_1V8, 0x00, 0x01, 0x40}; /* DIO3 = TCXO, 5 ms to start */
+    const uint8_t cal[2] = {0x89, 0x7F};                             /* Calibrate everything */
+    const uint8_t lora[2] = {0x8A, 0x01};                            /* SetPacketType(LoRa) */
+    const uint32_t frf = (uint32_t)(((uint64_t)LORA_FREQ_HZ << 25) / 32000000ULL);
+    const uint8_t freq[5] = {0x86, (uint8_t)(frf >> 24), (uint8_t)(frf >> 16), (uint8_t)(frf >> 8), (uint8_t)frf};
+    const uint8_t img[3] = {0x98, 0x6B, 0x6F};                       /* CalibrateImage 430-440 MHz */
+    const uint8_t pa[5] = {0x95, 0x04, 0x07, 0x00, 0x01};            /* SetPaConfig: SX1268, up to +22 dBm */
+    const uint8_t txp[3] = {0x8E, (uint8_t)tx_dbm, 0x04};            /* SetTxParams: power, 200 us ramp */
+    const uint8_t base[3] = {0x8F, 0x00, 0x00};                      /* buffer base addresses */
+    const uint8_t mod[5] = {0x8B, LORA_SF, LORA_BW, LORA_CR, 0x00};  /* low data rate optimise off */
+    const uint16_t mask = SX_IRQ_TX_DONE | SX_IRQ_RX_DONE | SX_IRQ_CRC_ERR | SX_IRQ_TIMEOUT;
+    const uint8_t irq[9] = {0x08, (uint8_t)(mask >> 8), (uint8_t)mask, (uint8_t)(mask >> 8), (uint8_t)mask, 0, 0, 0, 0};
+    LoraCmd(standby, 2);
+    LoraCmd(clr_err, 3);
+    LoraCmd(tcxo, 5);
+    LoraCmd(cal, 2);
+    LoraWaitReady(100);
+    LoraCmd(lora, 2);
+    LoraCmd(freq, 5);
+    LoraCmd(img, 3);
+    LoraWaitReady(100);
+    LoraCmd(pa, 5);
+    LoraCmd(txp, 3);
+    LoraCmd(base, 3);
+    LoraCmd(mod, 5);
+    LoraPacketParams(TP_SIZE);
+    LoraCmd(irq, 9);
+  }
+  {
+    const uint8_t tx[4] = {0x17, 0, 0, 0};   /* GetDeviceErrors */
+    uint8_t rx[4] = {0};
+    LoraWaitReady(50);
+    LoraXfer(tx, rx, 4);
+    return (uint16_t)((rx[2] << 8) | rx[3]);
+  }
+}
+
+/* Transmit one packet and wait for "sent" on DIO1 (at most 1.5 s, under the 2 s watchdog).
+   1 = sent, 0 = the radio did not report TxDone. */
+static int LoraSend(const uint8_t *data, uint8_t len)
+{
+  uint8_t tx[3 + 64] = {0x0E, 0x00};          /* WriteBuffer at offset 0 */
+  const uint8_t clr[3] = {0x02, 0xFF, 0xFF};  /* ClearIrqStatus */
+  const uint8_t go[4] = {0x83, 0x01, 0x77, 0x00};  /* SetTx, timeout 1.5 s (15.625 us units) */
+  if (len > 64U)
+  {
+    return 0;
+  }
+  for (uint8_t i = 0; i < len; i++)
+  {
+    tx[2 + i] = data[i];
+  }
+  LoraPacketParams(len);
+  LoraCmd(tx, (uint16_t)(2 + len));
+  LoraCmd(clr, 3);
+  LoraSwitch(1, 0);
+  LoraCmd(go, 4);
+  uint32_t t0 = HAL_GetTick();
+  while (HAL_GPIO_ReadPin(LORA_DIO1_PORT, LORA_DIO1_PIN) == GPIO_PIN_RESET && HAL_GetTick() - t0 < 1600U)
+  {
+  }
+  uint16_t irq = LoraIrq();
+  LoraCmd(clr, 3);
+  LoraSwitch(0, 0);
+  return (irq & SX_IRQ_TX_DONE) != 0;
+}
+
+/* Listen for up to `ms` (keep it under the watchdog period). Returns the packet length,
+   0 = nothing came, -1 = a packet came with a bad radio CRC. */
+static int LoraListen(uint8_t *out, uint8_t max, uint32_t ms, int *rssi_dbm, int *snr_db)
+{
+  const uint8_t clr[3] = {0x02, 0xFF, 0xFF};
+  const uint8_t go[4] = {0x82, 0xFF, 0xFF, 0xFF};   /* SetRx, continuous */
+  const uint8_t standby[2] = {0x80, 0x00};
+  LoraCmd(clr, 3);
+  LoraSwitch(0, 1);
+  LoraCmd(go, 4);
+  uint32_t t0 = HAL_GetTick();
+  while (HAL_GPIO_ReadPin(LORA_DIO1_PORT, LORA_DIO1_PIN) == GPIO_PIN_RESET && HAL_GetTick() - t0 < ms)
+  {
+  }
+  uint16_t irq = LoraIrq();
+  int n = 0;
+  if (irq & SX_IRQ_RX_DONE)
+  {
+    const uint8_t st[4] = {0x13, 0, 0, 0};    /* GetRxBufferStatus: length, start */
+    const uint8_t ps[5] = {0x14, 0, 0, 0, 0}; /* GetPacketStatus: RSSI, SNR */
+    uint8_t rs[4] = {0}, rp[5] = {0};
+    LoraWaitReady(50);
+    LoraXfer(st, rs, 4);
+    LoraWaitReady(50);
+    LoraXfer(ps, rp, 5);
+    *rssi_dbm = -(int)rp[2] / 2;
+    *snr_db = (int8_t)rp[3] / 4;
+    n = rs[2] > max ? max : rs[2];
+    uint8_t tx[3 + 64] = {0x1E, rs[3], 0x00}, rx[3 + 64] = {0};  /* ReadBuffer */
+    if (n > 64)
+    {
+      n = 64;
+    }
+    LoraWaitReady(50);
+    LoraXfer(tx, rx, (uint16_t)(3 + n));
+    for (int i = 0; i < n; i++)
+    {
+      out[i] = rx[3 + i];
+    }
+    if (irq & SX_IRQ_CRC_ERR)
+    {
+      n = -1;
+    }
+  }
+  LoraCmd(standby, 2);
+  LoraCmd(clr, 3);
+  LoraSwitch(0, 0);
+  return n;
 }
 
 #endif /* LORA_E22_H */

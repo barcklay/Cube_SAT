@@ -120,6 +120,18 @@ void HAL_I2C_MspInit(I2C_HandleTypeDef* hi2c)
     /* Peripheral clock enable */
     __HAL_RCC_I2C1_CLK_ENABLE();
     /* USER CODE BEGIN I2C1_MspInit 1 */
+#ifdef HAB_FLIGHT_BOARD
+    /* Flight board: the I2C clock is on PA15 (AF4), not on PB8. PB8 is BOOT0 there and has
+       a pull-down resistor: release it. */
+    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_8);
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+    GPIO_InitStruct.Pin = GPIO_PIN_15;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    GPIO_InitStruct.Alternate = GPIO_AF4_I2C1;
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+#endif
 
     /* USER CODE END I2C1_MspInit 1 */
 

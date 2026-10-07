@@ -115,6 +115,17 @@ _Static_assert(sizeof(LogRecord) == 128, "LogRecord must be 128 bytes");
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define BMP390_ADDR      (0x77U << 1)
+/* I2C clock pin: PB8 on the Nucleo bench, PA15 on the flight board (PB8 is BOOT0 there and is
+   pulled down). The flight build is made with -DHAB_FLIGHT_BOARD (cmake preset "Flight"). */
+#ifdef HAB_FLIGHT_BOARD
+#define I2C_SCL_PORT     GPIOA
+#define I2C_SCL_PIN      GPIO_PIN_15
+#define I2C_SCL_NAME     "SCL (PA15, flight board)"
+#else
+#define I2C_SCL_PORT     GPIOB
+#define I2C_SCL_PIN      GPIO_PIN_8
+#define I2C_SCL_NAME     "SCL (PB8, D15)"
+#endif
 #define BMP_REG_CHIP_ID  0x00U
 #define BMP_REG_ERR      0x02U
 #define BMP_REG_DATA     0x04U  /* 6 bytes: pressure xlsb..msb, temperature xlsb..msb */
@@ -2095,7 +2106,98 @@ int main(void)
       else if (cmd == 'L' || cmd == 'l')
       {
         WatchdogFeed();
-        LoraCheck();
+        if (LoraCheck())
+        {
+          /* also set the radio up for our link: starts its clock (TCXO) and calibrates it,
+             still without transmitting anything */
+          uint16_t err = LoraRadioSetup(LORA_TX_DBM_BENCH);
+          printf("LORA: radio setup %lu.%03lu MHz SF%u - chip errors 0x%04X: %s\r\n",
+                 (unsigned long)(LORA_FREQ_HZ / 1000000UL), (unsigned long)((LORA_FREQ_HZ / 1000UL) % 1000UL),
+                 (unsigned)LORA_SF, err,
+                 err == 0 ? "none, the clock runs and the calibration passed"
+                 : (err & 0x20) ? "the 32 MHz clock (TCXO on DIO3) did not start" : "calibration failed");
+        }
+        next_ms = HAL_GetTick() + FRAME_PERIOD_MS;
+      }
+      else if (cmd == 'P' || cmd == 'p')
+      {
+        /* Send ONE telemetry packet at the lowest power. Asks first: transmitting without an
+           antenna damages the module. */
+        uint8_t yes = 0;
+        printf("LORA: transmit one packet? antenna must be on. send Y within 5 s\r\n");
+        for (int i = 0; i < 5 && yes == 0; i++)
+        {
+          WatchdogFeed();
+          HAL_UART_Receive(&hlpuart1, &yes, 1, 1000);
+        }
+        if (yes == 'Y' || yes == 'y')
+        {
+          static uint16_t tx_seq;
+          Telemetry tm = {0};
+          uint8_t pkt[TP_SIZE];
+          tm.payload_id = 1;
+          tm.seq = tx_seq++;
+          tm.uptime_s = HAL_GetTick() / 1000U;
+          tm.state = frame.state;
+          tm.flags = (uint8_t)(((frame.valid & FRAME_OK_BARO) ? TP_FLAG_BARO_OK : 0) |
+                               ((frame.valid & FRAME_OK_GPSFIX) ? TP_FLAG_GPS_FIX : 0) |
+                               ((frame.valid & FRAME_OK_OUT) ? TP_FLAG_OUT_OK : 0) |
+                               (log_full ? 0 : TP_FLAG_LOG_OK));
+          tm.gps_sats = frame.gps_sats;
+          tm.lat_e7 = frame.gps_lat_e7;
+          tm.lon_e7 = frame.gps_lon_e7;
+          tm.gps_alt_m = frame.gps_alt_m;
+          tm.alt_m = frame.alt_m;
+          tm.vz_mps = frame.vz_mps;
+          tm.out_temp_c = frame.out_temp_c;
+          tm.board_temp_c = frame.baro_temp_c;
+          TelemetryEncode(&tm, pkt);
+          WatchdogFeed();
+          uint16_t err = LoraRadioSetup(LORA_TX_DBM_BENCH);
+          int sent = err == 0 && LoraSend(pkt, TP_SIZE);
+          printf("LORA: packet seq=%u %s (chip errors 0x%04X)\r\n", (unsigned)tm.seq,
+                 sent ? "SENT, the radio reported TxDone" : "NOT sent", err);
+        }
+        else
+        {
+          printf("LORA: transmit cancelled\r\n");
+        }
+        next_ms = HAL_GetTick() + FRAME_PERIOD_MS;
+      }
+      else if (cmd == 'R' || cmd == 'r')
+      {
+        /* Listen for 10 s and print every HAB-1 packet that arrives */
+        WatchdogFeed();
+        uint16_t err = LoraRadioSetup(LORA_TX_DBM_BENCH);
+        int got = 0;
+        printf("LORA: listening for 10 s (chip errors 0x%04X)\r\n", err);
+        for (int i = 0; i < 10 && err == 0; i++)
+        {
+          uint8_t pkt[64];
+          int rssi = 0, snr = 0;
+          Telemetry tm;
+          WatchdogFeed();
+          int n = LoraListen(pkt, sizeof(pkt), 1000, &rssi, &snr);
+          if (n == 0)
+          {
+            continue;
+          }
+          got++;
+          int rc = n < 0 ? -9 : TelemetryDecode(pkt, (uint32_t)n, &tm);
+          if (rc == 0)
+          {
+            printf("LORA: RX id=%u seq=%u up=%lus st=%s sats=%u lat=%ld lon=%ld h=%d m vz=%d cm/s"
+                   " out=%d C  rssi=%d dBm snr=%d dB\r\n", tm.payload_id, tm.seq,
+                   (unsigned long)tm.uptime_s, FS_NAME[tm.state > 5 ? 0 : tm.state], tm.gps_sats,
+                   (long)tm.lat_e7, (long)tm.lon_e7, (int)tm.alt_m, (int)(tm.vz_mps * 100.0f),
+                   (int)tm.out_temp_c, rssi, snr);
+          }
+          else
+          {
+            printf("LORA: RX %d bytes, not a good HAB-1 packet (code %d), rssi=%d dBm\r\n", n, rc, rssi);
+          }
+        }
+        printf("LORA: listening done, %d packet(s)\r\n", got);
         next_ms = HAL_GetTick() + FRAME_PERIOD_MS;
       }
       else if (cmd == 'I' || cmd == 'i')
@@ -2103,8 +2205,9 @@ int main(void)
         /* I2C line check: with the internal pull-down and then pull-up, does the line follow
            the MCU (nothing connected), stay high (module pull-up present) or stay low (shorted)? */
         GPIO_InitTypeDef g = {0};
-        const uint16_t pins[2] = {GPIO_PIN_8, GPIO_PIN_9};
-        const char *names[2] = {"SCL (PB8, D15)", "SDA (PB9, D14)"};
+        GPIO_TypeDef *const ports[2] = {I2C_SCL_PORT, GPIOB};
+        const uint16_t pins[2] = {I2C_SCL_PIN, GPIO_PIN_9};
+        const char *names[2] = {I2C_SCL_NAME, "SDA (PB9, D14)"};
         WatchdogFeed();
         HAL_I2C_DeInit(&hi2c1);
         for (int i = 0; i < 2; i++)
@@ -2112,13 +2215,13 @@ int main(void)
           g.Pin = pins[i];
           g.Mode = GPIO_MODE_INPUT;
           g.Pull = GPIO_PULLDOWN;
-          HAL_GPIO_Init(GPIOB, &g);
+          HAL_GPIO_Init(ports[i], &g);
           HAL_Delay(5);
-          int low = HAL_GPIO_ReadPin(GPIOB, pins[i]) == GPIO_PIN_SET;
+          int low = HAL_GPIO_ReadPin(ports[i], pins[i]) == GPIO_PIN_SET;
           g.Pull = GPIO_PULLUP;
-          HAL_GPIO_Init(GPIOB, &g);
+          HAL_GPIO_Init(ports[i], &g);
           HAL_Delay(5);
-          int high = HAL_GPIO_ReadPin(GPIOB, pins[i]) == GPIO_PIN_SET;
+          int high = HAL_GPIO_ReadPin(ports[i], pins[i]) == GPIO_PIN_SET;
           printf("I2C: %s reads %d with pull-down, %d with pull-up - %s\r\n", names[i], low, high,
                  (low && high) ? "held high: a module with pull-ups is connected"
                  : (!low && !high) ? "STUCK LOW: shorted to GND or another wire sits on this line"
@@ -2140,12 +2243,14 @@ int main(void)
         {
           /* Second try with the MCU's own weak pull-ups: an answer now means the wires are
              fine and only the external pull-up resistor is missing. */
-          g.Pin = GPIO_PIN_8 | GPIO_PIN_9;
           g.Mode = GPIO_MODE_AF_OD;
           g.Pull = GPIO_PULLUP;
           g.Speed = GPIO_SPEED_FREQ_LOW;
           g.Alternate = GPIO_AF4_I2C1;
+          g.Pin = GPIO_PIN_9;
           HAL_GPIO_Init(GPIOB, &g);
+          g.Pin = I2C_SCL_PIN;
+          HAL_GPIO_Init(I2C_SCL_PORT, &g);
           HAL_Delay(5);
           int with_pull = HAL_I2C_IsDeviceReady(&hi2c1, BMP390_ADDR, 3, 20) == HAL_OK;
           printf("I2C: with internal pull-ups the BMP390 %s\r\n",
