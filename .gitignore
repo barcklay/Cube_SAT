@@ -1,2 +1,3 @@
 lift_test_*.log
 data/
+hardware/flight_pcb/fab/gerber/

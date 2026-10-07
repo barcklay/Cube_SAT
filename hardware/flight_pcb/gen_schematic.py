@@ -85,7 +85,7 @@ def c(ref, value, a, b, block, fp=C0603):
 part("J1", "Connector_Generic:Conn_01x02", "BATTERY 4xL91", XH.format(n=2),
      {"1": "VBAT_IN", "2": "GND"}, "power")
 # resettable fuse: a pinched cable or a shorted part must not short the battery pack
-part("F1", "Device:Polyfuse", "PTC 0.5A hold", "Fuse:Fuse_1206_3216Metric",
+part("F1", "Device:Polyfuse", "PTC 0.5A 24V", "Fuse:Fuse_1206_3216Metric",
      {"1": "VBAT_IN", "2": "VBAT_RAW"}, "power")
 part("J2", "Connector_Generic:Conn_01x02", "POWER SWITCH (on the box)", XH.format(n=2),
      {"1": "VBAT_RAW", "2": "VBAT_SW"}, "power")
@@ -139,12 +139,13 @@ r("R9", "10k", "LORA_NSS", "+3V3", "pullups")
 r("R22", "100k", "LORA_TXEN", "GND", "pullups")   # antenna switch off while the MCU is in reset
 r("R23", "100k", "LORA_RXEN", "GND", "pullups")
 
-# LEDs
+# LEDs: red and yellow (forward voltage ~2 V), not green/blue (~3 V): from 3.3 V through 1k
+# a 3 V LED gets a fraction of a milliamp and is nearly dark, more so in the cold
 r("R10", "1k", "LED_ALIVE", "LED1_A", "leds")
-part("D1", "Device:LED", "ALIVE green", "LED_SMD:LED_0603_1608Metric",
+part("D1", "Device:LED", "ALIVE red", "LED_SMD:LED_0603_1608Metric",
      {"1": "GND", "2": "LED1_A"}, "leds")
 r("R11", "1k", "LED_FIX", "LED2_A", "leds")
-part("D2", "Device:LED", "GPS FIX blue", "LED_SMD:LED_0603_1608Metric",
+part("D2", "Device:LED", "GPS FIX yellow", "LED_SMD:LED_0603_1608Metric",
      {"1": "GND", "2": "LED2_A"}, "leds")
 
 # Recovery buzzer: an active piezo buzzer (3-24 V) on a 2-pin cable to the box wall,
@@ -157,7 +158,7 @@ r("R12", "4.7k", "BUZZER", "GND", "buzzer")
 part("D3", "Device:D", "1N4148W", "Diode_SMD:D_SOD-123",
      {"1": "BUZ_P", "2": "BUZ_N"}, "buzzer", "only needed if a magnetic buzzer is used")
 # the buzzer cable leaves the box: its own small fuse, so a pinched cable does not end the flight
-part("F2", "Device:Polyfuse", "PTC 0.2A hold", "Fuse:Fuse_1206_3216Metric",
+part("F2", "Device:Polyfuse", "PTC 0.2A 24V", "Fuse:Fuse_1206_3216Metric",
      {"1": "VBAT_PROT", "2": "BUZ_P"}, "buzzer")
 part("J11", "Connector_Generic:Conn_01x02", "BUZZER (+ / -)", XH.format(n=2),
      {"1": "BUZ_P", "2": "BUZ_N"}, "buzzer", "pin 1 = buzzer +, pin 2 = buzzer -")

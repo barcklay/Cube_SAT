@@ -227,7 +227,20 @@ def main():
     pcbnew.SaveBoard(PCB, board)
     for f in (dsn, ses):
         os.remove(f)
-    items = list(pcbnew.LoadBoard(PCB).GetTracks())  # re-read: the SWIG list breaks after SES import
+    # Re-read the board: the SWIG track list breaks after the SES import.
+    # The fan-out vias of +3V3 (0.6 mm pad) pick up the 0.4 mm drill of the Power netclass,
+    # which leaves a 0.1 mm copper ring: give every via at least 0.15 mm of ring.
+    board = pcbnew.LoadBoard(PCB)
+    fixed = 0
+    for t in board.GetTracks():
+        if t.GetClass() == "PCB_VIA" and t.GetWidth(pcbnew.F_Cu) - t.GetDrill() < mm(0.29):
+            t.SetDrill(t.GetWidth(pcbnew.F_Cu) - mm(0.3))
+            fixed += 1
+    if fixed:
+        pcbnew.ZONE_FILLER(board).Fill(board.Zones())
+        pcbnew.SaveBoard(PCB, board)
+        print("via drill reduced on %d vias (copper ring was under 0.15 mm)" % fixed)
+    items = list(pcbnew.LoadBoard(PCB).GetTracks())
     vias = [t for t in items if t.GetClass() == "PCB_VIA"]
     tracks = [t for t in items if t.GetClass() == "PCB_TRACK"]
     length = sum(t.GetLength() for t in tracks) / 1e6

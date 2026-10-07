@@ -8590,7 +8590,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "PTC 0.5A hold"
+		(property "Value" "PTC 0.5A 24V"
 			(at 248.92 100.33 0)
 			(effects
 				(font
@@ -13363,7 +13363,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "ALIVE green"
+		(property "Value" "ALIVE red"
 			(at 340.36 407.67 0)
 			(effects
 				(font
@@ -13574,7 +13574,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "GPS FIX blue"
+		(property "Value" "GPS FIX yellow"
 			(at 340.36 450.85 0)
 			(effects
 				(font
@@ -14079,7 +14079,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "PTC 0.2A hold"
+		(property "Value" "PTC 0.2A 24V"
 			(at 408.94 67.31 0)
 			(effects
 				(font
