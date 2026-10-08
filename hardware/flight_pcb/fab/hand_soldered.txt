@@ -6,7 +6,6 @@ J5  IMU GY-601N1  PinSocket_1x08_P2.54mm_Vertical
 J6  BAROMETER BMP390  PinSocket_1x07_P2.54mm_Vertical
 J7  GPS MAX-M10S  PinSocket_1x05_P2.54mm_Vertical
 J8  DS18B20 probe  JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical
-J9  LoRa E22-400M22S (adapter)  PinSocket_1x12_P2.54mm_Vertical
 J10  OLED SSD1306 (bench)  PinSocket_1x04_P2.54mm_Vertical
 J11  BUZZER (+ / -)  JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical
 J12  EXPANSION  PinSocket_1x10_P2.54mm_Vertical

@@ -1,0 +1,4 @@
+(fp_lib_table
+  (version 7)
+  (lib (name "hab1")(type "KiCad")(uri "${KIPRJMOD}/hab1.pretty")(options "")(descr "HAB-1 own footprints"))
+)

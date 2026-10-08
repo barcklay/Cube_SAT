@@ -145,9 +145,16 @@ and the bench stay one firmware.
   module, mounting holes and the board edge. Moved: flash socket turned round (its board would
   have hung 5 mm over the edge), barometer to the top middle with room on both sides (which side
   its board takes is not known), GPS next to it with its board towards the top edge.
-  Not measured: the LoRa adapter (not bought) and the OLED (bench only, hangs over the bottom edge).
+  Not measured: the OLED (bench only, hangs over the bottom edge).
   Which side each board takes was read from photos: check with a 1:1 paper print before ordering.
+
+- LoRa: the E22-400M22S is soldered straight onto the board by JLCPCB (U3, LCSC C411291) instead
+  of sitting on an adapter in socket J9. No adapter with 2.54 mm pins is sold for this module,
+  and the evaluation kit has its own microcontroller. Own footprint `hab1.pretty/E22-400M22S`
+  drawn from the Ebyte manual v1.2 section 3 and compared with the labels on the real module;
+  a rule area keeps tracks and vias out from under the module on the top layer. The antenna
+  stays on the module's IPX connector. The J9 pin-order question is gone.
 
 Still open from that review:
 a 1:1 paper fit check of the modules, a separate STLINK-V3MINIE for programming,
-J9 pin order (adapter not bought yet).
+the radio link itself (two modules talking), not tested yet.

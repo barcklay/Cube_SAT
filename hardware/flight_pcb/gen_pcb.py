@@ -67,14 +67,16 @@ PLACE = {
     "R10": (40.0, 9.0, 0), "D1": (40.0, 5.0, 0), "R11": (46.0, 9.0, 0), "D2": (46.0, 5.0, 0),
     # module sockets
     "J7": (68.5, 19.0, 270),   # GPS: body goes from the pin row up to the top edge, antenna cable leaves there
-    "J9": (90.0, 22.0, 0),     # LoRa: right edge, far from the GPS antenna side
-    "C14": (86.0, 20.0, 90),
+    # LoRa module, soldered on. Turned by 180 deg so its antenna connector (IPX) ends up in the
+    # top-right corner of the module, next to the board edge: the antenna cable leaves there.
+    "U3": (84.0, 33.0, 180),
+    "C14": (73.5, 38.5, 90), "C16": (73.5, 35.0, 90),   # at its VCC pin (pin 9)
     "J5": (8.0, 56.0, 0),      # IMU
     "J6": (37.5, 22.0, 90),    # barometer: free on both sides of the row (which side its body takes is unknown)
     "J4": (8.0, 44.7, 180),    # SPI flash, pin 1 at the bottom: its body must go inwards, not over the edge
     "J8": (14.0, 85.0, 90),    # DS18B20 probe connector at the edge (probe goes outside)
     "J10": (74.0, 86.0, 90),   # OLED (bench only)
-    "J12": (89.5, 56.0, 0),    # expansion header: right edge, under the LoRa adapter
+    "J12": (89.5, 56.0, 0),    # expansion header: right edge, under the LoRa module
     "R16": (85.5, 63.62, 0), "R17": (85.5, 66.16, 0), "R18": (85.5, 68.70, 0),
     "R19": (85.5, 71.24, 0), "R20": (85.5, 73.78, 0), "R21": (85.5, 76.32, 0),
     "R14": (14.0, 74.0, 0), "R15": (14.0, 76.2, 0),   # DS18B20 cable protection
@@ -95,7 +97,6 @@ LABELS = {
     "J5": ("IMU", "VCC GND SCLK SDI SDO CS INT1 INT2", "L", True),
     "J6": ("BARO", "INT CS SDO SDI SCK VCC GND", "D", True),
     "J7": ("GPS", "VCC GND TX RX PPS", "D", True),
-    "J9": ("LORA", "3V3 GND NSS SCK MOSI MISO BUSY DIO1 NRST TXEN RXEN GND", "R", True),
     "J10": ("OLED", "GND VDD SCK SDA", "U", True),
     "J12": ("EXP", "VBAT! GND 3V3 A1 A2 A3 A4 PWM1 PWM2 GND", "R", True),
     "J1": ("BATTERY", "+ GND", "L", False),
@@ -109,13 +110,12 @@ TP_NAMES = ["3V3", "GND", "VBAT", "SCL", "SDA", "GTX", "GRX", "SCK1", "SCK3", "S
 # as the ruler (2026-10-06): ref -> (name, length along the pin row, depth from the row,
 # side of the row the board takes when walking from pin 1 to the last pin: "R", "L" or
 # "both" when unknown, measured or guessed). The pin row sits ~1.2 mm inside one edge.
-# The LoRa adapter is not bought yet: its rectangle is a guess.
+# The LoRa module is soldered on (U3) and only 3 mm tall: it is not in this list.
 MODULES = {
     "J4": ("FLASH", 15.5, 14.0, "R", "measured"),
     "J5": ("IMU GY-601N1", 20.1, 18.1, "L", "measured"),
     "J6": ("BARO BMP390", 22.0, 11.0, "both", "measured, side unknown"),
     "J7": ("GPS MAX-M10S", 13.5, 16.0, "R", "measured"),
-    "J9": ("LoRa E22 adapter", 34.0, 21.0, "R", "GUESS"),
 }
 ROW_INSET = 1.2
 # parts tall enough to hit a module board that sits ~8.5 mm up on its socket
@@ -198,7 +198,8 @@ def main():
     missing = []
     for ref, c in sorted(comps.items()):
         lib, name = c["footprint"].split(":")
-        fp = pcbnew.FootprintLoad(os.path.join(FPLIB, lib + ".pretty"), name)
+        libdir = HERE if lib == "hab1" else FPLIB   # hab1 = our own footprints, next to this file
+        fp = pcbnew.FootprintLoad(os.path.join(libdir, lib + ".pretty"), name)
         if fp is None:
             missing.append(c["footprint"])
             continue
@@ -218,6 +219,25 @@ def main():
                 pad.SetNet(netinfo[net])
     if missing:
         sys.exit("missing footprints: %s" % missing)
+
+    # Nothing may run under the LoRa module on the top layer: its underside is not insulated
+    # (Ebyte manual 4.1). A rule area keeps tracks and vias out from between its two pad rows.
+    u3 = board.FindFootprintByReference("U3")
+    cx, cy = pcbnew.ToMM(u3.GetPosition().x) - OX, pcbnew.ToMM(u3.GetPosition().y) - OY
+    keep = pcbnew.ZONE(board)
+    keep.SetIsRuleArea(True)
+    keep.SetDoNotAllowTracks(True)
+    keep.SetDoNotAllowVias(True)
+    keep.SetDoNotAllowZoneFills(False)
+    keep.SetDoNotAllowPads(False)
+    keep.SetDoNotAllowFootprints(False)
+    keep.SetLayer(pcbnew.F_Cu)
+    keep.SetZoneName("no tracks under the LoRa module")
+    ko = keep.Outline()
+    ko.NewOutline()
+    for dx, dy in ((-5.6, -9.8), (5.6, -9.8), (5.6, 9.8), (-5.6, 9.8)):
+        ko.Append(mm(OX + cx + dx), mm(OY + cy + dy))
+    board.Add(keep)
 
     # module body outlines on User.Drawings, computed from the real pad positions, and a check
     # that no module board hangs over the edge or lands on another module or a tall part

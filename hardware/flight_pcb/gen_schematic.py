@@ -184,14 +184,20 @@ part("J8", "Connector_Generic:Conn_01x03", "DS18B20 probe", XH.format(n=3),
 # the probe cable leaves the box: a short on it must not pull the 3V3 rail down or hit PA10 directly
 r("R14", "100", "+3V3", "DS_VCC", "modules")
 r("R15", "100", "DS18B20_DQ", "DS_DQ", "modules")
-part("J9", "Connector_Generic:Conn_01x12", "LoRa E22-400M22S (adapter)", SOCK.format(n=12),
-     {"1": "+3V3", "2": "GND", "3": "LORA_NSS", "4": "SPI2_SCK", "5": "SPI2_MOSI",
-      "6": "SPI2_MISO", "7": "LORA_BUSY", "8": "LORA_DIO1", "9": "LORA_NRST",
-      "10": "LORA_TXEN", "11": "LORA_RXEN", "12": "GND"}, "modules",
-     "rev A: E22 on a header until HW-6 is done")
-# 4.7u, not 47u: the LDL1117 stability chart (DS12022 fig. 20/21) covers up to 22 uF on the
-# output; C2 10u + C10 4.7u + this 4.7u + the 100n caps stay inside it
-c("C14", "4.7u", "+3V3", "GND", "modules", C0805)
+# LoRa module soldered straight onto the board by JLCPCB (LCSC C411291): no adapter, no socket.
+# Pin numbers and names from the Ebyte E22-400M22S manual v1.2 section 3, the same as the
+# labels on the back of the real module. DIO2 is not used (TXEN/RXEN are driven by the MCU);
+# ANT (pin 21) stays open: the antenna goes on the module's own IPX connector.
+part("U3", "Connector_Generic:Conn_01x22", "E22-400M22S", "hab1:E22-400M22S",
+     {"1": "GND", "2": "GND", "3": "GND", "4": "GND", "5": "GND", "6": "LORA_RXEN",
+      "7": "LORA_TXEN", "8": None, "9": "+3V3", "10": "GND", "11": "GND", "12": "GND",
+      "13": "LORA_DIO1", "14": "LORA_BUSY", "15": "LORA_NRST", "16": "SPI2_MISO",
+      "17": "SPI2_MOSI", "18": "SPI2_SCK", "19": "LORA_NSS", "20": "GND", "21": None,
+      "22": "GND"}, "modules",
+     "1-5 GND, 6 RXEN, 7 TXEN, 8 DIO2, 9 VCC, 10-12 GND, 13 DIO1, 14 BUSY, 15 NRST, 16 MISO, "
+     "17 MOSI, 18 SCK, 19 NSS, 20 GND, 21 ANT, 22 GND")
+c("C14", "4.7u", "+3V3", "GND", "modules", C0805)   # at the module's VCC pin
+c("C16", "100n", "+3V3", "GND", "modules")
 part("J10", "Connector_Generic:Conn_01x04", "OLED SSD1306 (bench)", SOCK.format(n=4),
      {"1": "GND", "2": "+3V3", "3": "I2C_SCL", "4": "I2C_SDA"}, "modules",
      "order GND VDD SCK SDA as on the module (checked 2026-09-29)")

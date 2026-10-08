@@ -46,6 +46,7 @@ LCSC = {
     ("PTC 0.2A 24V", "Fuse_1206_3216Metric"): ("C20984", "SMD1206P020TF resettable fuse 24V", "extended"),
     ("LDL1117S33R", "SOT-223-3_TabPin2"): ("C435835", "LDL1117S33R 3.3V LDO SOT-223", "extended"),
     ("STM32G474RET6", "LQFP-64_10x10mm_P0.5mm"): ("C521608", "STM32G474RET6 LQFP-64", "extended"),
+    ("E22-400M22S", "E22-400M22S"): ("C411291", "E22-400M22S LoRa module (Ebyte, SX1268)", "extended"),
     ("RESET", "SW_SPST_TL3342"): ("C2886898", "TL3342F160QG push button", "extended"),
     ("STDC14 SWD+VCP", "PinHeader_2x07_P1.27mm_Vertical_SMD"): ("C7465995", "FTSH-107-01-F-DV-K keyed 2x7 1.27 mm header", "extended"),
 }
