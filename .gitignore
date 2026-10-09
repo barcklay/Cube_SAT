@@ -2,3 +2,4 @@ lift_test_*.log
 data/
 hardware/flight_pcb/fab/gerber/
 hardware/lora_adapter/fab/gerber/
+__pycache__/

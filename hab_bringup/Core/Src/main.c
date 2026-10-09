@@ -1892,6 +1892,75 @@ static void FlightResume(int bmp_ok)
   PrintFixed(fsm.max_alt, 0);
   printf(" m\r\n");
 }
+#ifdef HAB_GROUND_STATION
+/* Ground receiver (HW-29), cmake preset "Ground": the same board and the same radio wiring,
+   but it only listens. Every packet goes to the laptop as one text line; the decoding is
+   done there (tools/ground_station.py), so a new packet format needs no new firmware here.
+   NOTHING IS EVER TRANSMITTED in this build.
+
+     RX t=<ms> len=<n> rssi=<dBm> snr=<dB> data=<hex>     a packet
+     RXBAD t=<ms> rssi=<dBm> snr=<dB>                     a packet damaged on the air
+     GS: alive t=<ms> rx=<n> bad=<n> noise=<dBm>          every 5 s: the link to the laptop lives */
+static void GroundStationRun(void)
+{
+  uint32_t rx_count = 0, bad_count = 0;
+  printf("\r\n=== HAB-1 ground receiver ===\r\n");
+  WatchdogStart();
+  for (;;)
+  {
+    WatchdogFeed();
+    uint16_t err = LoraCheck() ? LoraRadioSetup(LORA_TX_DBM_BENCH) : 0xFFFFU;
+    WatchdogFeed();
+    if (err != 0U)
+    {
+      printf("GS: radio not ready (chip errors 0x%04X), next try in 1 s\r\n", err);
+      HAL_Delay(1000);
+      continue;
+    }
+    printf("GS: listening on %lu Hz SF%u BW125\r\n", (unsigned long)LORA_FREQ_HZ, LORA_SF);
+    LoraRxStart();
+    uint32_t alive_ms = HAL_GetTick();
+    for (;;)
+    {
+      uint8_t pkt[64];
+      int rssi = 0, snr = 0;
+      WatchdogFeed();
+      int n = LoraRxPoll(pkt, sizeof(pkt), &rssi, &snr);
+      if (n > 0)
+      {
+        rx_count++;
+        printf("RX t=%lu len=%d rssi=%d snr=%d data=", (unsigned long)HAL_GetTick(), n, rssi, snr);
+        for (int i = 0; i < n; i++)
+        {
+          printf("%02X", pkt[i]);
+        }
+        printf("\r\n");
+      }
+      else if (n < 0)
+      {
+        bad_count++;
+        printf("RXBAD t=%lu rssi=%d snr=%d\r\n", (unsigned long)HAL_GetTick(), rssi, snr);
+      }
+      if (HAL_GetTick() - alive_ms >= 5000U)
+      {
+        alive_ms = HAL_GetTick();
+        /* the chip answers "receiving" (mode 5 in GetStatus); anything else: set it up again */
+        const uint8_t tx[2] = {SX_GET_STATUS, 0};
+        uint8_t rx[2] = {0};
+        LoraWaitReady(50);
+        LoraXfer(tx, rx, 2);
+        if (((rx[1] >> 4) & 0x07U) != 5U)
+        {
+          printf("GS: radio left receive mode (status 0x%02X), restarting it\r\n", rx[1]);
+          break;
+        }
+        printf("GS: alive t=%lu rx=%lu bad=%lu noise=%d\r\n", (unsigned long)alive_ms,
+               (unsigned long)rx_count, (unsigned long)bad_count, LoraNoiseDbm());
+      }
+    }
+  }
+}
+#endif /* HAB_GROUND_STATION */
 /* USER CODE END 0 */
 
 /**
@@ -1930,6 +1999,9 @@ int main(void)
   MX_SPI3_Init();
   /* USER CODE BEGIN 2 */
   setvbuf(stdout, NULL, _IONBF, 0);
+#ifdef HAB_GROUND_STATION
+  GroundStationRun();  /* never returns */
+#endif
   /* The programmer (st-flash) sets "halt on reset" in the debug unit. That register
      survives every reset except power-off, so a watchdog reset would stop the core
      instead of restarting the program. Clear it: no programmer is attached in flight. */

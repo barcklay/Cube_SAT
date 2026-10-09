@@ -394,4 +394,74 @@ static int LoraListen(uint8_t *out, uint8_t max, uint32_t ms, int *rssi_dbm, int
   return n;
 }
 
+/* ---- Continuous receive for the ground station (HW-29) --------------------------------
+   LoraListen() above stops the receiver at the end of every call and would cut a packet
+   that is arriving at that moment. Here the radio stays in receive all the time:
+   LoraRxStart() once, then LoraRxPoll() as often as possible. */
+#ifdef HAB_GROUND_STATION
+static void LoraRxStart(void)
+{
+  const uint8_t clr[3] = {0x02, 0xFF, 0xFF};
+  const uint8_t go[4] = {0x82, 0xFF, 0xFF, 0xFF};   /* SetRx, continuous: stays in receive after a packet */
+  LoraCmd(clr, 3);
+  LoraSwitch(0, 1);
+  LoraCmd(go, 4);
+}
+
+/* Returns the packet length, 0 = nothing new, -1 = a packet came with a bad radio CRC.
+   The receiver keeps running. */
+static int LoraRxPoll(uint8_t *out, uint8_t max, int *rssi_dbm, int *snr_db)
+{
+  const uint8_t clr[3] = {0x02, 0xFF, 0xFF};
+  if (HAL_GPIO_ReadPin(LORA_DIO1_PORT, LORA_DIO1_PIN) == GPIO_PIN_RESET)
+  {
+    return 0;
+  }
+  uint16_t irq = LoraIrq();
+  int n = 0;
+  if (irq & SX_IRQ_RX_DONE)
+  {
+    const uint8_t st[4] = {0x13, 0, 0, 0};    /* GetRxBufferStatus: length, start */
+    const uint8_t ps[5] = {0x14, 0, 0, 0, 0}; /* GetPacketStatus: RSSI, SNR */
+    uint8_t rs[4] = {0}, rp[5] = {0};
+    uint8_t tx[3 + 64] = {0x1E, 0x00, 0x00}, rx[3 + 64] = {0};  /* ReadBuffer */
+    LoraWaitReady(50);
+    LoraXfer(st, rs, 4);
+    LoraWaitReady(50);
+    LoraXfer(ps, rp, 5);
+    *rssi_dbm = -(int)rp[2] / 2;
+    *snr_db = (int8_t)rp[3] / 4;
+    n = rs[2] > max ? max : rs[2];
+    if (n > 64)
+    {
+      n = 64;
+    }
+    tx[1] = rs[3];
+    LoraWaitReady(50);
+    LoraXfer(tx, rx, (uint16_t)(3 + n));
+    for (int i = 0; i < n; i++)
+    {
+      out[i] = rx[3 + i];
+    }
+    if (irq & SX_IRQ_CRC_ERR)
+    {
+      n = -1;
+    }
+  }
+  LoraCmd(clr, 3);
+  return n;
+}
+
+/* Signal level on the channel right now, dBm: with nobody transmitting this is the noise
+   floor of the place (GetRssiInst). Only meaningful while receiving. */
+static int LoraNoiseDbm(void)
+{
+  const uint8_t tx[3] = {0x15, 0, 0};
+  uint8_t rx[3] = {0};
+  LoraWaitReady(50);
+  LoraXfer(tx, rx, 3);
+  return -(int)rx[2] / 2;
+}
+#endif /* HAB_GROUND_STATION */
+
 #endif /* LORA_E22_H */

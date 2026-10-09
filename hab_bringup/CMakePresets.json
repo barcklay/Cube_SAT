@@ -30,6 +30,14 @@
                 "CMAKE_BUILD_TYPE": "Debug",
                 "HAB_FLIGHT_BOARD": "ON"
             }
+        },
+        {
+            "name": "Ground",
+            "inherits": "default",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "HAB_GROUND_STATION": "ON"
+            }
         }
     ],
     "buildPresets": [
@@ -44,6 +52,10 @@
         {
             "name": "Flight",
             "configurePreset": "Flight"
+        },
+        {
+            "name": "Ground",
+            "configurePreset": "Ground"
         }
     ]
 }

@@ -56,6 +56,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined symbols
     $<$<BOOL:${HAB_FLIGHT_BOARD}>:HAB_FLIGHT_BOARD>   # cmake --preset Flight: pins of our own PCB
+    $<$<BOOL:${HAB_GROUND_STATION}>:HAB_GROUND_STATION>   # cmake --preset Ground: radio receiver for the laptop
 )
 
 # Remove wrong libob.a library dependency when using cpp files
