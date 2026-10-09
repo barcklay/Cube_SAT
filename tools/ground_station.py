@@ -120,29 +120,34 @@ def look(here, lat, lon, alt_m):
 
 # ---------------------------------------------------------------- where the lines come from
 
-def open_port(path):
+def open_port(path, attempt=0):
+    """With no --port given, every reopen tries the next USB serial port: the payload board
+    on the same laptop is also a /dev/cu.usbmodem*, and only the receiver prints "GS:" lines."""
     ports = [path] if path else sorted(glob.glob("/dev/cu.usbmodem*"))
     if not ports:
-        return None
+        return None, None
+    name = ports[attempt % len(ports)]
     try:
-        fd = os.open(ports[0], os.O_RDONLY | os.O_NOCTTY | os.O_NONBLOCK)
+        fd = os.open(name, os.O_RDONLY | os.O_NOCTTY | os.O_NONBLOCK)
     except OSError:
-        return None
+        return None, name
     attrs = termios.tcgetattr(fd)
     attrs[0] = attrs[1] = attrs[3] = 0
     attrs[2] = termios.CS8 | termios.CREAD | termios.CLOCAL
     attrs[4] = attrs[5] = termios.B115200
     termios.tcsetattr(fd, termios.TCSANOW, attrs)
-    return fd
+    return fd, name
 
 
 def serial_lines(path, silence_s=12.0):
     """Lines from the receiver board. The board prints "GS: alive" every 5 s, so a longer
-    silence means the USB link went stale (the port stays open but nothing comes): reopen."""
-    fd, buf, last, warned = None, b"", time.time(), False
+    time without a receiver line means the USB link went stale (the port stays open but nothing
+    comes) or this port is another board: reopen, trying the next port."""
+    fd, buf, last, warned, attempt = None, b"", time.time(), False, 0
     while True:
         if fd is None:
-            fd = open_port(path)
+            fd, name = open_port(path, attempt)
+            attempt += 1
             if fd is None:
                 if not warned:
                     yield None, "нет платы-приёмника на USB, жду…"
@@ -150,7 +155,7 @@ def serial_lines(path, silence_s=12.0):
                 time.sleep(1.0)
                 continue
             buf, last, warned = b"", time.time(), False
-            yield None, "порт открыт, слушаю"
+            yield None, f"порт {name} открыт, слушаю"
         try:
             ready, _, _ = select.select([fd], [], [], 0.5)
             chunk = os.read(fd, 4096) if ready else b""
@@ -164,15 +169,17 @@ def serial_lines(path, silence_s=12.0):
             except OSError:
                 pass
             fd = None
-            yield None, "\a!!! НЕТ СВЯЗИ С ПЛАТОЙ-ПРИЁМНИКОМ — проверь USB, переоткрываю порт"
+            yield None, f"\a!!! ПРИЁМНИК МОЛЧИТ на {name} — проверь USB, переоткрываю порт"
             time.sleep(1.0)
             continue
         if chunk:
-            last = time.time()
             buf += chunk
             while b"\n" in buf:
                 line, buf = buf.split(b"\n", 1)
-                yield time.time(), line.decode("ascii", "replace").strip()
+                text = line.decode("ascii", "replace").strip()
+                if text.startswith(("GS:", "RX", "===")):
+                    last = time.time()
+                    yield time.time(), text
 
 
 def replay_lines(path, speed):
