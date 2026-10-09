@@ -62,7 +62,7 @@ BOOT_PATTERNS = [
 
 
 def open_port():
-    ports = glob.glob("/dev/cu.usbmodem*")
+    ports = sorted(glob.glob("/dev/cu.usbmodem*"), key=lambda p: (not p[len("/dev/cu.usbmodem"):].isdigit(), p))  # the ST-LINK port is all digits; the Arduino receiver is not
     if not ports:
         return None
     try:

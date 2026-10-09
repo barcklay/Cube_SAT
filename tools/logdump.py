@@ -19,7 +19,7 @@ import time
 
 
 def open_port():
-    ports = glob.glob("/dev/cu.usbmodem*")
+    ports = sorted(glob.glob("/dev/cu.usbmodem*"), key=lambda p: (not p[len("/dev/cu.usbmodem"):].isdigit(), p))  # the ST-LINK port is all digits; the Arduino receiver is not
     if not ports:
         sys.exit("board not found (/dev/cu.usbmodem*)")
     fd = os.open(ports[0], os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
