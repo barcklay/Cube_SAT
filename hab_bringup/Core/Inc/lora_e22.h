@@ -325,7 +325,11 @@ static uint32_t lora_tx_ms;
 
 /* Transmit one packet and wait for "sent" on DIO1 (at most 1.5 s, under the 2 s watchdog:
    feed the watchdog right before the call). 1 = sent, 0 = the radio did not report TxDone. */
-static int LoraSend(const uint8_t *data, uint8_t len)
+static uint32_t lora_tx_t0;
+
+/* Start transmitting one packet and return at once (a few ms of SPI). The packet is on the
+   air for about 0.2 s; ask LoraSendPoll() later. 0 = not started (packet too long). */
+static int LoraSendStart(const uint8_t *data, uint8_t len)
 {
   uint8_t tx[3 + 64] = {0x0E, 0x00};          /* WriteBuffer at offset 0 */
   const uint8_t clr[3] = {0x02, 0xFF, 0xFF};  /* ClearIrqStatus */
@@ -343,7 +347,7 @@ static int LoraSend(const uint8_t *data, uint8_t len)
   LoraCmd(clr, 3);
   LoraSwitch(1, 0);
   LoraCmd(go, 4);
-  uint32_t t0 = HAL_GetTick();
+  lora_tx_t0 = HAL_GetTick();
   {
     /* status right after the command: chip mode 6 = transmitting */
     const uint8_t gs[2] = {SX_GET_STATUS, 0};
@@ -352,10 +356,19 @@ static int LoraSend(const uint8_t *data, uint8_t len)
     LoraXfer(gs, rs, 2);
     lora_tx_status = rs[1];
   }
-  while (HAL_GPIO_ReadPin(LORA_DIO1_PORT, LORA_DIO1_PIN) == GPIO_PIN_RESET && HAL_GetTick() - t0 < 1600U)
+  return 1;
+}
+
+/* 0 = still on the air, 1 = sent (TxDone), -1 = the radio gave up or stayed silent for 2 s.
+   On 1 and -1 the antenna switch is turned off and the radio is back in standby. */
+static int LoraSendPoll(void)
+{
+  const uint8_t clr[3] = {0x02, 0xFF, 0xFF};
+  if (HAL_GPIO_ReadPin(LORA_DIO1_PORT, LORA_DIO1_PIN) == GPIO_PIN_RESET && HAL_GetTick() - lora_tx_t0 < 2000U)
   {
+    return 0;
   }
-  lora_tx_ms = HAL_GetTick() - t0;
+  lora_tx_ms = HAL_GetTick() - lora_tx_t0;
   uint16_t irq = LoraIrq();
   lora_tx_irq = irq;
   {
@@ -367,7 +380,26 @@ static int LoraSend(const uint8_t *data, uint8_t len)
   }
   LoraCmd(clr, 3);
   LoraSwitch(0, 0);
-  return (irq & SX_IRQ_TX_DONE) != 0;
+  return (irq & SX_IRQ_TX_DONE) ? 1 : -1;
+}
+
+static int LoraSend(const uint8_t *data, uint8_t len)
+{
+  int r = 0;
+  if (!LoraSendStart(data, len))
+  {
+    return 0;
+  }
+  while (r == 0 && HAL_GetTick() - lora_tx_t0 < 1600U)
+  {
+    r = LoraSendPoll();
+  }
+  if (r == 0)
+  {
+    lora_tx_t0 -= 2000U;   /* waited long enough: make the poll close the attempt */
+    r = LoraSendPoll();
+  }
+  return r == 1;
 }
 
 /* Listen for up to `ms` (keep it under the watchdog period). Returns the packet length,

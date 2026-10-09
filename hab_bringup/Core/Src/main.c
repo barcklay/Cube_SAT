@@ -1892,6 +1892,100 @@ static void FlightResume(int bmp_ok)
   PrintFixed(fsm.max_alt, 0);
   printf(" m\r\n");
 }
+/* ---------------- Radio telemetry (HW-13) ----------------
+   Every RADIO_EVERY_N frames the latest frame goes out as one 28-byte packet. The loop
+   does not wait for the radio: the packet is started in one frame and checked in the next
+   ones. The power is still the bench value: the flight power waits for the check of the
+   Thai rules for 433 MHz.
+   Bench build: off after power-up, command 'A' turns it on (antenna!). Flight build: on. */
+#define RADIO_EVERY_N  25U     /* one packet every 5 s */
+#define RADIO_TX_DBM   LORA_TX_DBM_BENCH
+#define RADIO_PAYLOAD_ID 1U
+
+static uint8_t radio_auto;     /* periodic transmit is on */
+static uint8_t radio_ready;    /* the radio is set up */
+static uint8_t radio_busy;     /* a packet is on the air */
+static uint16_t radio_seq;
+static uint32_t radio_sent, radio_failed;
+
+static void RadioPacket(const TelemetryFrame *f, uint8_t pkt[TP_SIZE])
+{
+  Telemetry tm = {0};
+  tm.payload_id = RADIO_PAYLOAD_ID;
+  tm.seq = radio_seq++;
+  tm.uptime_s = HAL_GetTick() / 1000U;
+  tm.state = f->state;
+  tm.flags = (uint8_t)(((f->valid & FRAME_OK_BARO) ? TP_FLAG_BARO_OK : 0) |
+                       ((f->valid & FRAME_OK_GPSFIX) ? TP_FLAG_GPS_FIX : 0) |
+                       ((f->valid & FRAME_OK_OUT) ? TP_FLAG_OUT_OK : 0) |
+                       (log_full ? 0 : TP_FLAG_LOG_OK));
+  tm.gps_sats = f->gps_sats;
+  tm.lat_e7 = f->gps_lat_e7;
+  tm.lon_e7 = f->gps_lon_e7;
+  tm.gps_alt_m = f->gps_alt_m;
+  tm.alt_m = f->alt_m;
+  tm.vz_mps = f->vz_mps;
+  tm.out_temp_c = f->out_temp_c;
+  tm.board_temp_c = f->baro_temp_c;
+  TelemetryEncode(&tm, pkt);
+}
+
+/* Called once per frame */
+static void RadioTick(const TelemetryFrame *f)
+{
+  if (radio_busy)
+  {
+    int r = LoraSendPoll();
+    if (r == 0)
+    {
+      return;
+    }
+    radio_busy = 0;
+    if (r == 1)
+    {
+      radio_sent++;
+      if (radio_sent % 12U == 1U)   /* once a minute, not every packet */
+      {
+        printf("LORA: auto: %lu sent, %lu failed, last one took %lu ms\r\n", (unsigned long)radio_sent,
+               (unsigned long)radio_failed, (unsigned long)lora_tx_ms);
+      }
+    }
+    else
+    {
+      radio_failed++;
+      radio_ready = 0;              /* set the radio up again before the next packet */
+      printf("LORA: auto: packet NOT sent (irq 0x%04X, chip errors 0x%04X), %lu failed so far\r\n",
+             lora_tx_irq, lora_tx_err, (unsigned long)radio_failed);
+    }
+    return;
+  }
+  if (!radio_auto)
+  {
+    return;
+  }
+  if (!radio_ready)
+  {
+    /* The setup takes about 0.3 s, so it gets a frame of its own, 1 s before a packet is due */
+    if (f->seq % RADIO_EVERY_N == RADIO_EVERY_N - 5U)
+    {
+      uint16_t err = LoraRadioSetup(RADIO_TX_DBM);
+      radio_ready = err == 0U;
+      if (!radio_ready)
+      {
+        radio_failed++;
+        printf("LORA: auto: radio setup failed, chip errors 0x%04X\r\n", err);
+      }
+    }
+    return;
+  }
+  if (f->seq % RADIO_EVERY_N == 0U)
+  {
+    uint8_t pkt[TP_SIZE];
+    RadioPacket(f, pkt);
+    radio_busy = LoraSendStart(pkt, TP_SIZE) != 0;
+  }
+}
+
 #ifdef HAB_GROUND_STATION
 /* Ground receiver (HW-29), cmake preset "Ground": the same board and the same radio wiring,
    but it only listens. Every packet goes to the laptop as one text line; the decoding is
@@ -2014,6 +2108,9 @@ int main(void)
   FlashDeselect();
   ImuCsInit();
   BuzzerInit();
+#ifdef HAB_FLIGHT_BOARD
+  radio_auto = 1;  /* nobody is there to switch it on in flight */
+#endif
   HAL_Delay(100);
   printf("\r\n=== hab_bringup: BMP390 + SPI flash + GPS ===\r\n");
 #if WIRING_DIAG
@@ -2204,32 +2301,16 @@ int main(void)
         }
         if (yes == 'Y' || yes == 'y')
         {
-          static uint16_t tx_seq;
-          Telemetry tm = {0};
           uint8_t pkt[TP_SIZE];
-          tm.payload_id = 1;
-          tm.seq = tx_seq++;
-          tm.uptime_s = HAL_GetTick() / 1000U;
-          tm.state = frame.state;
-          tm.flags = (uint8_t)(((frame.valid & FRAME_OK_BARO) ? TP_FLAG_BARO_OK : 0) |
-                               ((frame.valid & FRAME_OK_GPSFIX) ? TP_FLAG_GPS_FIX : 0) |
-                               ((frame.valid & FRAME_OK_OUT) ? TP_FLAG_OUT_OK : 0) |
-                               (log_full ? 0 : TP_FLAG_LOG_OK));
-          tm.gps_sats = frame.gps_sats;
-          tm.lat_e7 = frame.gps_lat_e7;
-          tm.lon_e7 = frame.gps_lon_e7;
-          tm.gps_alt_m = frame.gps_alt_m;
-          tm.alt_m = frame.alt_m;
-          tm.vz_mps = frame.vz_mps;
-          tm.out_temp_c = frame.out_temp_c;
-          tm.board_temp_c = frame.baro_temp_c;
-          TelemetryEncode(&tm, pkt);
+          uint16_t this_seq = radio_seq;
+          RadioPacket(&frame, pkt);
+          radio_busy = 0;
           WatchdogFeed();
           uint16_t err = LoraRadioSetup(LORA_TX_DBM_BENCH);
           WatchdogFeed();
           int sent = err == 0 && LoraSend(pkt, TP_SIZE);
           WatchdogFeed();
-          printf("LORA: packet seq=%u %s (chip errors 0x%04X)\r\n", (unsigned)tm.seq,
+          printf("LORA: packet seq=%u %s (chip errors 0x%04X)\r\n", (unsigned)this_seq,
                  sent ? "SENT, the radio reported TxDone" : "NOT sent", err);
           printf("LORA: tx detail: status after SetTx 0x%02X, waited %lu ms, irq 0x%04X, errors after 0x%04X\r\n",
                  lora_tx_status, (unsigned long)lora_tx_ms, lora_tx_irq, lora_tx_err);
@@ -2337,6 +2418,31 @@ int main(void)
         }
         next_ms = HAL_GetTick() + FRAME_PERIOD_MS;
       }
+      else if (cmd == 'A' || cmd == 'a')
+      {
+        /* Periodic telemetry on / off */
+        if (radio_auto)
+        {
+          radio_auto = 0;
+          printf("LORA: auto transmit OFF (%lu sent, %lu failed)\r\n", (unsigned long)radio_sent,
+                 (unsigned long)radio_failed);
+        }
+        else
+        {
+          uint8_t yes = 0;
+          printf("LORA: transmit a packet every %lu s? antenna must be on. send Y within 5 s\r\n",
+                 (unsigned long)(RADIO_EVERY_N * FRAME_PERIOD_MS / 1000U));
+          for (int i = 0; i < 5 && yes == 0; i++)
+          {
+            WatchdogFeed();
+            HAL_UART_Receive(&hlpuart1, &yes, 1, 1000);
+          }
+          radio_auto = yes == 'Y' || yes == 'y';
+          radio_ready = 0;
+          printf("LORA: auto transmit %s\r\n", radio_auto ? "ON" : "stays off");
+        }
+        next_ms = HAL_GetTick() + FRAME_PERIOD_MS;
+      }
       else if (cmd == 'H' || cmd == 'h')
       {
         printf("TEST: hanging the loop on purpose, the watchdog should reset the board in ~2 s\r\n");
@@ -2408,6 +2514,7 @@ int main(void)
     GpsFillFrame(&frame);
     FlightUpdate(&frame, press_pa, (frame.valid & FRAME_OK_BARO) != 0);
     BuzzerSet(fsm.state == FS_LANDED && frame.seq % BUZZER_EVERY_N == 0U);
+    RadioTick(&frame);
 
     /* A lost sensor is re-tried every 5 s; the rest of the system keeps flying meanwhile. */
     if (frame.seq % RETRY_EVERY_N == 0U)
