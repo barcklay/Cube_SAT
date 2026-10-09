@@ -2226,9 +2226,13 @@ int main(void)
           TelemetryEncode(&tm, pkt);
           WatchdogFeed();
           uint16_t err = LoraRadioSetup(LORA_TX_DBM_BENCH);
+          WatchdogFeed();
           int sent = err == 0 && LoraSend(pkt, TP_SIZE);
+          WatchdogFeed();
           printf("LORA: packet seq=%u %s (chip errors 0x%04X)\r\n", (unsigned)tm.seq,
                  sent ? "SENT, the radio reported TxDone" : "NOT sent", err);
+          printf("LORA: tx detail: status after SetTx 0x%02X, waited %lu ms, irq 0x%04X, errors after 0x%04X\r\n",
+                 lora_tx_status, (unsigned long)lora_tx_ms, lora_tx_irq, lora_tx_err);
         }
         else
         {

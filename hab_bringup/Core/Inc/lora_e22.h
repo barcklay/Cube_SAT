@@ -236,7 +236,11 @@ static int LoraCheck(void)
 
 static void LoraCmd(const uint8_t *tx, uint16_t n)
 {
-  uint8_t rx[16];
+  uint8_t rx[3 + 64];   /* as long as the longest command: WriteBuffer with a 64-byte packet */
+  if (n > sizeof(rx))
+  {
+    return;
+  }
   LoraWaitReady(50);
   LoraXfer(tx, rx, n);
 }
@@ -314,8 +318,13 @@ static uint16_t LoraRadioSetup(int8_t tx_dbm)
   }
 }
 
-/* Transmit one packet and wait for "sent" on DIO1 (at most 1.5 s, under the 2 s watchdog).
-   1 = sent, 0 = the radio did not report TxDone. */
+/* What the chip said during the last LoraSend(), for the report on the console */
+static uint16_t lora_tx_irq, lora_tx_err;
+static uint8_t lora_tx_status;
+static uint32_t lora_tx_ms;
+
+/* Transmit one packet and wait for "sent" on DIO1 (at most 1.5 s, under the 2 s watchdog:
+   feed the watchdog right before the call). 1 = sent, 0 = the radio did not report TxDone. */
 static int LoraSend(const uint8_t *data, uint8_t len)
 {
   uint8_t tx[3 + 64] = {0x0E, 0x00};          /* WriteBuffer at offset 0 */
@@ -335,10 +344,27 @@ static int LoraSend(const uint8_t *data, uint8_t len)
   LoraSwitch(1, 0);
   LoraCmd(go, 4);
   uint32_t t0 = HAL_GetTick();
+  {
+    /* status right after the command: chip mode 6 = transmitting */
+    const uint8_t gs[2] = {SX_GET_STATUS, 0};
+    uint8_t rs[2] = {0};
+    LoraWaitReady(50);
+    LoraXfer(gs, rs, 2);
+    lora_tx_status = rs[1];
+  }
   while (HAL_GPIO_ReadPin(LORA_DIO1_PORT, LORA_DIO1_PIN) == GPIO_PIN_RESET && HAL_GetTick() - t0 < 1600U)
   {
   }
+  lora_tx_ms = HAL_GetTick() - t0;
   uint16_t irq = LoraIrq();
+  lora_tx_irq = irq;
+  {
+    const uint8_t ge[4] = {0x17, 0, 0, 0};   /* GetDeviceErrors */
+    uint8_t re[4] = {0};
+    LoraWaitReady(50);
+    LoraXfer(ge, re, 4);
+    lora_tx_err = (uint16_t)((re[2] << 8) | re[3]);
+  }
   LoraCmd(clr, 3);
   LoraSwitch(0, 0);
   return (irq & SX_IRQ_TX_DONE) != 0;
