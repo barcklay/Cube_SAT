@@ -1895,11 +1895,15 @@ static void FlightResume(int bmp_ok)
 /* ---------------- Radio telemetry (HW-13) ----------------
    Every RADIO_EVERY_N frames the latest frame goes out as one 28-byte packet. The loop
    does not wait for the radio: the packet is started in one frame and checked in the next
-   ones. The power is still the bench value: the flight power waits for the check of the
-   Thai rules for 433 MHz.
+   ones. Flight power is the Thai licence-exempt limit (10 mW e.i.r.p., HW-166); the bench
+   build stays at the lowest power.
    Bench build: off after power-up, command 'A' turns it on (antenna!). Flight build: on. */
 #define RADIO_EVERY_N  25U     /* one packet every 5 s */
+#ifdef HAB_FLIGHT_BOARD
+#define RADIO_TX_DBM   LORA_TX_DBM_FLIGHT
+#else
 #define RADIO_TX_DBM   LORA_TX_DBM_BENCH
+#endif
 #define RADIO_PAYLOAD_ID 1U
 
 static uint8_t radio_auto;     /* periodic transmit is on */

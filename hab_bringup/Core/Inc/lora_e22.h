@@ -220,12 +220,15 @@ static int LoraCheck(void)
  * antenna switch driven by TXEN / RXEN. Commands are those of the Semtech SX1261/2/8
  * datasheet, chapter 13.
  * ------------------------------------------------------------------------------------- */
-#define LORA_FREQ_HZ      434500000UL  /* inside 433.05-434.79 MHz; CONFIRM the Thai (NBTC) rules */
+#define LORA_FREQ_HZ      434500000UL  /* Thailand: 300-500 MHz is licence-exempt up to 10 mW e.i.r.p.
+                                          (NBTC list of licence-exempt equipment, 2020; see HW-166) */
 #define LORA_SF           9U           /* spreading factor 9, 125 kHz, coding rate 4/5: */
 #define LORA_BW           0x04U        /* a 28-byte packet is on the air for about 0.2 s */
 #define LORA_CR           0x01U
 #define LORA_PREAMBLE     8U
 #define LORA_TX_DBM_BENCH (-9)         /* lowest power the chip has: two modules on one table */
+#define LORA_TX_DBM_FLIGHT 8           /* 6 mW from the chip + up to 2 dBi of antenna = the 10 mW
+                                          (10 dBm) e.i.r.p. limit. The module can do +22: do not raise */
 #define LORA_TCXO_1V8     0x02U        /* TCXO supply from DIO3; 1.8 V is the usual value for E22
                                           modules (from memory, not in the Ebyte manual) */
 
