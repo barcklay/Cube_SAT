@@ -27,6 +27,7 @@
 #include <math.h>
 #include "flight_sm.h"
 #include "lora_e22.h"
+#include "oled_screens.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -294,6 +295,11 @@ static LogRecord log_queue[LOG_QUEUE_LEN];
 static uint32_t log_q_head, log_q_tail;
 static uint32_t log_written, log_dropped;
 static int log_full;  /* RAM value right after power-up, before we set it */
+
+/* Results of the power-on checks, kept for the bench OLED (HW-142) */
+static uint8_t boot_flash_ok;    /* SPI flash: erase + write + read-back worked */
+static uint8_t boot_gps_talks;   /* the GPS module sends valid NMEA */
+static uint8_t boot_gps_airborne; /* and confirmed the Airborne <4g model */
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -563,6 +569,7 @@ static void FlashBootTest(void)
   ok = ok && memcmp(&rec, &check, sizeof(rec)) == 0;
   printf("Flash: erase + write + read-back %s, boot_count now %lu\r\n",
          ok ? "OK" : "FAILED", (unsigned long)rec.boot_count);
+  boot_flash_ok = (uint8_t)ok;
 }
 
 /* Why erase is required: programming only clears bits, so old & new = result. */
@@ -1654,6 +1661,7 @@ static void GpsInit(void)
     return;
   }
   printf("GPS: NMEA OK at %lu baud\r\n", (unsigned long)baud);
+  boot_gps_talks = 1;
 
   /* 2. What model did the module wake up with? 8 here after a power cycle = setting survived. */
   int ram = GpsGetDynModel(0);
@@ -1673,6 +1681,7 @@ static void GpsInit(void)
   /* 4. Read back to be sure. */
   ram = GpsGetDynModel(0);
   printf("GPS dynModel now: RAM=%d (%s)\r\n", ram, DynModelName(ram));
+  boot_gps_airborne = ram == (int)DYNMODEL_AIRBORNE_4G;
 }
 
 /* Copy the latest parsed GPS data into the frame (GPS itself updates once per second). */
@@ -1990,6 +1999,158 @@ static void RadioTick(const TelemetryFrame *f)
   }
 }
 
+/* ---------------- Bench OLED (HW-142) ----------------
+   A small screen on the barometer's I2C wires, for photos and video on the ground. At
+   power-on it lists the real results of the start-up checks, then it turns the pages:
+   flight, satellites, radio and health, a running line. The blue button turns the page
+   by hand and holds it; one more press after the last page gives the turning back.
+   Not plugged in = nothing happens. The flight build never looks for it. */
+#define OLED_FRAME_BYTES   400U  /* picture bytes sent per frame: about 40 ms of the 200 ms */
+#define OLED_VERDICT_FRAMES 15U  /* READY / NOT READY stays for 3 s */
+#define OLED_HIST_EVERY_N  2U    /* graph: one point per 0.4 s, 51 s across the screen */
+#ifdef HAB_FLIGHT_BOARD
+#define OLED_ALLOWED       0     /* the flight board has no screen: never look for one */
+#else
+#define OLED_ALLOWED       1
+#endif
+enum { DISP_FLIGHT, DISP_GPS, DISP_SYSTEM, DISP_TICKER, DISP_PAGES };
+static const uint8_t DISP_FRAMES[DISP_PAGES] = {25, 25, 25, 54};  /* 5 s each, the line once round */
+static const char *const DISP_NAME[DISP_PAGES] = {"flight", "satellites", "radio and health", "running line"};
+
+static OledView disp;
+static uint8_t disp_page, disp_hold;
+static uint32_t disp_page_frames;
+static volatile uint8_t disp_button;
+
+/* Blue button of the NUCLEO, from its interrupt */
+void BSP_PB_Callback(Button_TypeDef Button)
+{
+  (void)Button;
+  disp_button = 1;
+}
+
+static void DisplayBoot(void)
+{
+  if (OLED_ALLOWED && OledInit())
+  {
+    printf("OLED: screen found at 0x3C\r\n");
+  }
+  disp.probe_id = RADIO_PAYLOAD_ID;
+  disp.boot = boot_id;
+  OledDrawSplash(&disp);
+  OledFlush(sizeof(oled_fb));
+}
+
+/* One line of the power-on list: the result of a check that has just been run. */
+static void DisplayCheck(int which, int ok, const char *note)
+{
+  disp.boot = boot_id;
+  disp.chk[which] = ok ? OLED_PASS : OLED_FAIL;
+  snprintf(disp.chk_note[which], sizeof(disp.chk_note[which]), "%s", note);
+  if (!oled_ok)
+  {
+    return;
+  }
+  OledDrawSplash(&disp);
+  OledFlush(sizeof(oled_fb));
+  HAL_Delay(200);  /* the real checks are faster than the eye: give each line a moment */
+}
+
+/* Called once per frame, after everything else in the frame is done. */
+static void DisplayTick(const TelemetryFrame *f)
+{
+  static uint32_t last_press_ms;
+  if (f->seq % OLED_HIST_EVERY_N == 0U)
+  {
+    OledHistPush(f->alt_m);
+  }
+  if (disp_button)
+  {
+    disp_button = 0;
+    if (HAL_GetTick() - last_press_ms > 300U && f->seq > OLED_VERDICT_FRAMES)
+    {
+      last_press_ms = HAL_GetTick();
+      if (disp_hold && disp_page == DISP_PAGES - 1)
+      {
+        disp_hold = 0;
+        disp_page = 0;
+      }
+      else
+      {
+        disp_page = (uint8_t)(disp_hold ? disp_page + 1 : (disp_page + 1) % DISP_PAGES);
+        disp_hold = 1;
+      }
+      disp_page_frames = 0;
+      printf("OLED: page \"%s\", %s\r\n", DISP_NAME[disp_page], disp_hold ? "held" : "pages turn by themselves");
+    }
+  }
+  if (!oled_ok)
+  {
+    /* plugged in later, or pulled out and put back: look for it every 5 s */
+    if (OLED_ALLOWED && f->seq % RETRY_EVERY_N == 0U && OledInit())
+    {
+      printf("OLED: screen found at 0x3C\r\n");
+    }
+    if (!oled_ok)
+    {
+      return;
+    }
+  }
+
+  disp.state = FS_NAME[f->state];
+  disp.mode = sim_active ? "SIM" : (test_mode ? "LIFT" : NULL);
+  disp.alt_m = f->alt_m;
+  disp.vz_mps = f->vz_mps;
+  disp.gps_link = (f->valid & FRAME_OK_GPSLINK) != 0;
+  disp.gps_fix = (f->valid & FRAME_OK_GPSFIX) != 0;
+  disp.gps_airborne = boot_gps_airborne;
+  disp.sats_used = f->gps_sats;
+  disp.sats_seen = f->gps_in_view;
+  for (int i = 0; i < 4; i++)  /* GPS_TALKERS order: GPS, GLONASS, Galileo, BeiDou */
+  {
+    disp.seen[i] = (uint8_t)gsv_in_view[i];
+  }
+  memcpy(disp.utc, disp.gps_link ? gps.utc : "", sizeof(disp.utc));
+  disp.radio_on = radio_auto;
+  disp.tx_dbm = RADIO_TX_DBM;
+  disp.freq_khz = LORA_FREQ_HZ / 1000UL;
+  disp.sent = radio_sent;
+  disp.failed = radio_failed;
+  disp.board_temp_ok = (f->valid & FRAME_OK_BARO) != 0;
+  disp.out_temp_ok = (f->valid & FRAME_OK_OUT) != 0;
+  disp.board_temp_c = f->baro_temp_c;
+  disp.out_temp_c = f->out_temp_c;
+  disp.sensors_all = 5;
+  disp.sensors_ok = (uint8_t)(((f->valid & FRAME_OK_BARO) != 0) + ((f->valid & FRAME_OK_IMU) != 0) +
+                              ((f->valid & FRAME_OK_OUT) != 0) + ((f->valid & FRAME_OK_GPSLINK) != 0) +
+                              (log_full ? 0 : 1));
+  disp.log_free_pct = (uint8_t)((uint64_t)(LOG_SLOTS - log_next) * 100U / LOG_SLOTS);
+  disp.log_min_left = (LOG_SLOTS - log_next) / 5U / 60U;
+  disp.uptime_s = HAL_GetTick() / 1000U;
+
+  if (f->seq <= OLED_VERDICT_FRAMES)
+  {
+    OledDrawVerdict(&disp);
+  }
+  else
+  {
+    if (!disp_hold && disp_page_frames >= DISP_FRAMES[disp_page])
+    {
+      disp_page = (uint8_t)((disp_page + 1) % DISP_PAGES);
+      disp_page_frames = 0;
+    }
+    switch (disp_page)
+    {
+      case DISP_FLIGHT: OledDrawFlight(&disp); break;
+      case DISP_GPS:    OledDrawGps(&disp); break;
+      case DISP_SYSTEM: OledDrawSystem(&disp); break;
+      default:          OledDrawTicker(&disp, disp_page_frames); break;
+    }
+    disp_page_frames++;
+  }
+  OledFlush(OLED_FRAME_BYTES);
+}
+
 #ifdef HAB_GROUND_STATION
 /* Ground receiver (HW-29), cmake preset "Ground": the same board and the same radio wiring,
    but it only listens. Every packet goes to the laptop as one text line; the decoding is
@@ -2121,12 +2282,17 @@ int main(void)
   FlashWiringCheck();
 #endif
 
+  DisplayBoot();
   FlashBootTest();
   printf("RESET cause: %s (boot %u)\r\n", ResetCauseName(reset_cause), boot_id);
   LogInit();
+  char note[24];
+  snprintf(note, sizeof(note), "%lu%% FREE", (unsigned long)((uint64_t)(LOG_SLOTS - log_next) * 100U / LOG_SLOTS));
+  DisplayCheck(OLED_CHK_MEMORY, boot_flash_ok && log_next < LOG_SLOTS, boot_flash_ok ? note : "NO ANSWER");
 
   int imu_ok = ImuInit() == 0;
   FlashNoEraseDemo();
+  DisplayCheck(OLED_CHK_IMU, imu_ok, "");
 
   int bmp_ok = BmpInit() == 0;
   if (bmp_ok)
@@ -2148,14 +2314,27 @@ int main(void)
     printf(" m above sea level at standard pressure (GPS refines it)\r\n");
   }
   FlightResume(bmp_ok);
+  snprintf(note, sizeof(note), "%lu hPa", (unsigned long)(ground_pa / 100.0 + 0.5));
+  DisplayCheck(OLED_CHK_BARO, bmp_ok, bmp_ok ? note : "");
 
   int ds_ok = Ds18b20Init() == 0;
   if (ds_ok)
   {
     Ds18b20StartConversion();
   }
+  DisplayCheck(OLED_CHK_TEMP, ds_ok, "");
 
   GpsInit();
+  DisplayCheck(OLED_CHK_GPS, boot_gps_talks && boot_gps_airborne,
+               !boot_gps_talks ? "NO DATA" : (boot_gps_airborne ? "AIRBORNE" : "NO AIRBORNE"));
+  if (oled_ok)
+  {
+    /* the radio is asked only for the screen's list: it answers on its wires, nothing is sent */
+    int lora_ok = LoraCheck();
+    snprintf(note, sizeof(note), "%lu.%lu MHz", (unsigned long)(LORA_FREQ_HZ / 1000000UL),
+             (unsigned long)(LORA_FREQ_HZ / 100000UL % 10UL));
+    DisplayCheck(OLED_CHK_RADIO, lora_ok, lora_ok ? note : "NO ANSWER");
+  }
 
   /* Scheduler state. Each deadline is the previous deadline + period, so small
      delays do not add up over time. Timing is measured with the cycle counter. */
@@ -2577,6 +2756,7 @@ int main(void)
     }
     FramePrint(&frame);
     uint32_t print_us = (DWT->CYCCNT - print_start) / cycles_per_us;
+    DisplayTick(&frame);
 
     /* ---- loop statistics: is the period stable, how long does a frame take? ---- */
     if (frame.seq > 1U)  /* the first period includes start-up, skip it */
