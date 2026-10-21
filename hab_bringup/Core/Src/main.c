@@ -1770,6 +1770,40 @@ static void BuzzerSet(int on)
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, on ? GPIO_PIN_SET : GPIO_PIN_RESET);
 }
 
+/* LED "alive": PB0 = A3 on the Nucleo, LED_ALIVE on the flight board. Normally one short
+   blink a second. Before the launch with too little room in the black box for a flight it
+   blinks 10 times a second: erase the log (E, then Y) before launching. A flight with the
+   time on the pad needs about 4 h; the warning starts below 5 h of room (31 % used). */
+#define LED_PORT         GPIOB
+#define LED_PIN          GPIO_PIN_0
+#define LOG_WARN_MIN     300U
+#define LOG_WARN_SLOTS   (LOG_WARN_MIN * 60U * 5U)
+
+static int LogRoomLow(void)
+{
+  return log_full || LOG_SLOTS - log_next < LOG_WARN_SLOTS;
+}
+
+static void LedInit(void)
+{
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+  GPIO_InitTypeDef g = {0};
+  g.Pin = LED_PIN;
+  g.Mode = GPIO_MODE_OUTPUT_PP;
+  g.Pull = GPIO_NOPULL;
+  g.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(LED_PORT, &g);
+  HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_RESET);
+}
+
+/* Called as often as possible from the main loop. */
+static void LedService(void)
+{
+  uint32_t t = HAL_GetTick();
+  int on = (fsm.state == FS_PRELAUNCH && LogRoomLow()) ? (int)((t / 50U) % 2U) : (t % 1000U) < 50U;
+  HAL_GPIO_WritePin(LED_PORT, LED_PIN, on ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+
 /* 'S' simulation: a real flight profile (5 m/s up, burst at 30 km, parachute down)
    played SIM_SPEED times faster, with +-0.5 m of noise. The 20 s around the burst run
    at real speed, so burst detection is tested on a real fall speed. */
@@ -2273,6 +2307,7 @@ int main(void)
   FlashDeselect();
   ImuCsInit();
   BuzzerInit();
+  LedInit();
 #ifdef HAB_FLIGHT_BOARD
   radio_auto = 1;  /* nobody is there to switch it on in flight */
 #endif
@@ -2286,9 +2321,15 @@ int main(void)
   FlashBootTest();
   printf("RESET cause: %s (boot %u)\r\n", ResetCauseName(reset_cause), boot_id);
   LogInit();
+  if (LogRoomLow())
+  {
+    printf("LOG: WARNING - %lu min of room left, a flight needs %u. Erase before launch: E, then Y."
+           " The LED blinks fast until then\r\n",
+           (unsigned long)((LOG_SLOTS - log_next) / 5U / 60U), (unsigned)LOG_WARN_MIN);
+  }
   char note[24];
   snprintf(note, sizeof(note), "%lu%% FREE", (unsigned long)((uint64_t)(LOG_SLOTS - log_next) * 100U / LOG_SLOTS));
-  DisplayCheck(OLED_CHK_MEMORY, boot_flash_ok && log_next < LOG_SLOTS, boot_flash_ok ? note : "NO ANSWER");
+  DisplayCheck(OLED_CHK_MEMORY, boot_flash_ok && !LogRoomLow(), boot_flash_ok ? note : "NO ANSWER");
 
   int imu_ok = ImuInit() == 0;
   FlashNoEraseDemo();
@@ -2366,6 +2407,7 @@ int main(void)
     /* Between frames: keep draining GPS bytes and feeding the log to the flash. */
     GpsPoll();
     LogService();
+    LedService();
     uint8_t cmd;
     if (HAL_UART_Receive(&hlpuart1, &cmd, 1, 0) == HAL_OK)
     {
