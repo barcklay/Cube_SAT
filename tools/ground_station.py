@@ -46,6 +46,7 @@ STATES = ("PRELAUNCH", "ASCENT", "FLOAT", "BURST", "DESCENT", "LANDED")
 STATES_RU = {"PRELAUNCH": "на земле", "ASCENT": "подъём", "FLOAT": "зависание", "BURST": "шар лопнул",
              "DESCENT": "спуск", "LANDED": "приземлился"}
 FLAG_BARO_OK, FLAG_GPS_FIX, FLAG_OUT_OK, FLAG_LOG_OK, FLAG_RESUMED = 0x08, 0x10, 0x20, 0x40, 0x80
+ALT_SRC = ("BARO", "MIX", "GPS", "HOLD", "NONE")   # byte 25: where alt_m comes from (altitude_fuse.h)
 
 
 def crc16(data):
@@ -66,7 +67,7 @@ def decode(raw):
         raise ValueError(f"первый байт 0x{raw[0]:02X}, не наш пакет")
     if crc16(raw[:-2]) != raw[26] | raw[27] << 8:
         raise ValueError("не сошлась контрольная сумма")
-    (_, pid, seq, up, sf, sats, lat, lon, gps_alt, alt, vz, out_t, board_t, vbat, _, _) = \
+    (_, pid, seq, up, sf, sats, lat, lon, gps_alt, alt, vz, out_t, board_t, vbat, alt_src, _) = \
         struct.unpack(TP_FORMAT, raw)
     state = sf & 0x07
     return {
@@ -78,6 +79,7 @@ def decode(raw):
         "lat": lat / 1e7, "lon": lon / 1e7, "gps_alt_m": gps_alt, "alt_m": alt - 1000,
         "vz_mps": vz / 100.0, "out_temp_c": out_t, "board_temp_c": board_t,
         "vbat_v": round(vbat * 0.04, 2),
+        "alt_src": ALT_SRC[alt_src] if alt_src < len(ALT_SRC) else f"?{alt_src}",
     }
 
 
@@ -94,7 +96,7 @@ def encode(p):
                        clamp(p["lon"] * 1e7, -2**31, 2**31 - 1), clamp(p["gps_alt_m"], 0, 65535),
                        clamp(p["alt_m"] + 1000, 0, 65535), clamp(p["vz_mps"] * 100, -32768, 32767),
                        clamp(p["out_temp_c"], -128, 127), clamp(p["board_temp_c"], -128, 127),
-                       clamp(p.get("vbat_v", 0) / 0.04, 0, 255), 0)
+                       clamp(p.get("vbat_v", 0) / 0.04, 0, 255), ALT_SRC.index(p.get("alt_src", "BARO")))
     return body + struct.pack("<H", crc16(body))
 
 
@@ -234,7 +236,8 @@ def demo_lines(speed, period_s=5.0):
                          "gps_fix": True, "out_ok": True, "log_ok": True, "sats": 12 + rng.randint(-2, 3),
                          "lat": lat, "lon": lon, "gps_alt_m": 170 + alt, "alt_m": alt, "vz_mps": vz,
                          "out_temp_c": temp, "board_temp_c": max(-20.0, 25.0 - alt / 1500.0),
-                         "vbat_v": 6.4 - t / 20000.0})
+                         "vbat_v": 6.4 - t / 20000.0,
+                         "alt_src": "BARO" if alt < 7200 else "MIX" if alt < 8700 else "GPS"})
         wall = start_wall + t
         roll = rng.random()
         if roll < 0.05 or (state == "LANDED" and roll < 0.6):
@@ -259,7 +262,7 @@ def demo_lines(speed, period_s=5.0):
 CSV_COLUMNS = ("pc_time", "gs_ms", "id", "seq", "lost_before", "uptime_s", "state", "baro_ok", "gps_fix",
                "out_ok", "log_ok", "resumed", "sats", "lat", "lon", "gps_alt_m", "alt_m", "vz_mps",
                "out_temp_c", "board_temp_c", "vbat_v", "rssi_dbm", "snr_db", "dist_m", "bearing_deg",
-               "elev_deg")
+               "elev_deg", "alt_src")
 
 
 class Station:
@@ -346,7 +349,7 @@ class Station:
                    ("baro_ok", "gps_fix", "out_ok", "log_ok", "resumed")), p["sats"], f"{p['lat']:.7f}",
                    f"{p['lon']:.7f}", p["gps_alt_m"], p["alt_m"], p["vz_mps"], p["out_temp_c"],
                    p["board_temp_c"], p["vbat_v"], rssi, snr, *("" if v is None else v for v in
-                   (p["dist_m"], p["bearing"], p["elev"])))
+                   (p["dist_m"], p["bearing"], p["elev"])), p["alt_src"])
             self.csv.write(",".join(str(v) for v in row) + "\n")
             self.csv.flush()
         arrow = "↑" if p["vz_mps"] > 0.3 else "↓" if p["vz_mps"] < -0.3 else "·"
@@ -418,6 +421,7 @@ PAGE = r"""<!doctype html>
     <div class="big"><span id="alt">—</span> <small style="font-size:14px;color:var(--dim)">м над стартом</small></div>
     <div class="row"><span>Скорость по вертикали</span><span id="vz">—</span></div>
     <div class="row"><span>Высота по GPS</span><span id="gpsalt">—</span></div>
+    <div class="row"><span>Высота считается</span><span id="altsrc">—</span></div>
     <div class="row"><span>Спутников</span><span id="sats">—</span></div>
     <div class="row"><span>Снаружи / на плате</span><span id="temp">—</span></div>
     <div class="row"><span>Батарея</span><span id="vbat">—</span></div>
@@ -501,6 +505,8 @@ function show() {
   $('flags').innerHTML = f.map(x => `<span class="warn">${x}</span>`).join(' · ');
   $('alt').textContent = fmt(last.alt_m); $('vz').textContent = (last.vz_mps > 0 ? '+' : '') + fmt(last.vz_mps, 1) + ' м/с';
   $('gpsalt').textContent = fmt(last.gps_alt_m) + ' м'; $('sats').textContent = last.sats;
+  $('altsrc').textContent = {BARO: 'по барометру', MIX: 'по барометру и GPS', GPS: 'по GPS',
+    HOLD: 'GPS пропал: по последней скорости', NONE: 'неизвестна'}[last.alt_src] || last.alt_src;
   $('temp').textContent = `${last.out_temp_c}° / ${last.board_temp_c}°`; $('vbat').textContent = last.vbat_v ? fmt(last.vbat_v, 2) + ' В' : 'не измеряется';
   $('uptime').textContent = Math.floor(last.uptime_s / 60) + ' мин ' + (last.uptime_s % 60) + ' с';
   $('rssi').textContent = `${last.rssi} дБм / ${last.snr > 0 ? '+' : ''}${last.snr} дБ`;

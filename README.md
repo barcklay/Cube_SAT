@@ -110,6 +110,7 @@ python3 tools/logdump.py            # download the black box as CSV
 python3 tools/ground_station.py --demo   # ground station on a made-up flight: map, altitude, signal
 python3 tools/test_ground_station.py     # packet decoding checked against the firmware's own C code
 cc -O2 -o /tmp/t tools/test_flight_sm.c -lm && /tmp/t   # state machine tests
+cc -O2 -o /tmp/a tools/test_altitude.c -lm && /tmp/a    # barometer + GPS altitude: flights to 33 km, GPS gaps
 cc -O2 -o /tmp/o tools/test_oled.c -lm && /tmp/o        # bench OLED: screens and the piecewise update
 ```
 

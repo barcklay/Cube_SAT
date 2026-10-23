@@ -22,7 +22,9 @@
  *  22    out_temp_c   outside temperature, deg C (-128..127)
  *  23    board_temp_c barometer chip temperature, deg C
  *  24    vbat_40mv    battery voltage in 40 mV steps (0..10.2 V), 0 = not measured
- *  25    spare        0
+ *  25    alt_src      where alt_m comes from (HW-15): 0 barometer, 1 mix, 2 GPS,
+ *                     3 carried forward without GPS, 4 not known. Was a spare 0 before:
+ *                     older packets read as "barometer", which is what they were
  *  26-27 crc          CRC-16/CCITT-FALSE over bytes 0..25
  */
 #ifndef TELEMETRY_PACKET_H
@@ -55,6 +57,7 @@ typedef struct
   float out_temp_c;
   float board_temp_c;
   float vbat_v;        /* 0 = not measured */
+  uint8_t alt_src;     /* ALT_SRC_* of altitude_fuse.h, 0..4 */
 } Telemetry;
 
 static inline uint16_t TpCrc16(const uint8_t *p, uint32_t n)
@@ -120,7 +123,7 @@ static inline void TelemetryEncode(const Telemetry *t, uint8_t out[TP_SIZE])
   out[22] = (uint8_t)(int8_t)TpClamp(t->out_temp_c, -128, 127);
   out[23] = (uint8_t)(int8_t)TpClamp(t->board_temp_c, -128, 127);
   out[24] = (uint8_t)TpClamp(t->vbat_v / 0.04f, 0, 255);
-  out[25] = 0;
+  out[25] = t->alt_src;
   TpPut16(out + 26, TpCrc16(out, TP_SIZE - 2U));
 }
 
@@ -153,6 +156,7 @@ static inline int TelemetryDecode(const uint8_t *in, uint32_t len, Telemetry *t)
   t->out_temp_c = (float)(int8_t)in[22];
   t->board_temp_c = (float)(int8_t)in[23];
   t->vbat_v = (float)in[24] * 0.04f;
+  t->alt_src = in[25];
   return 0;
 }
 

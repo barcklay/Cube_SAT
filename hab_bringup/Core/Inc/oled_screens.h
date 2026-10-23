@@ -33,6 +33,7 @@ typedef struct
   const char *state;              /* flight state name */
   const char *mode;               /* "SIM", "LIFT" or NULL */
   float alt_m, vz_mps;
+  const char *alt_src;            /* "BARO", "MIX", "GPS", "HOLD", "NONE" or NULL */
 
   uint8_t gps_link, gps_fix, gps_airborne, sats_used, sats_seen;
   uint8_t seen[4];                /* GPS, GLONASS, Galileo, BeiDou */
@@ -189,6 +190,10 @@ static void OledDrawFlight(const OledView *v)
   OledFix(&s[1], v->vz_mps < 0 ? -v->vz_mps : v->vz_mps, 1);
   OledTextRight(OLED_W - 1, 11, s, 1);
   OledTextRight(OLED_W - 1, 20, "m/s", 1);
+  if (v->alt_src)  /* where the altitude comes from: barometer low, GPS high (HW-15) */
+  {
+    OledTextRight(OLED_W - 1, 28, v->alt_src, 1);
+  }
 
   OledDrawGraph(35, OLED_H - 1);
 }

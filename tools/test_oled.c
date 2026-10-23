@@ -149,12 +149,14 @@ int main(int argc, char **argv)
   v.vz_mps = 1.6f;
   v.state = "ASCENT";
   v.mode = "LIFT";
+  v.alt_src = "BARO";
   OledDrawFlight(&v);
   save("flight_lift");
   v.alt_m = 29871.0f;
   v.vz_mps = -38.2f;
   v.state = "DESCENT";
   v.mode = "SIM";
+  v.alt_src = "HOLD";  /* the widest label next to the widest altitude */
   OledDrawFlight(&v);
   save("flight_high");
   v.mode = NULL;

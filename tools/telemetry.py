@@ -41,7 +41,7 @@ RE_LOOP = re.compile(r"^LOOP: period (\d+) ms\s+frames (\d+)\s+jitter max (\d+) 
 RE_OUT = re.compile(r"DS18B20: T=(-?[\d.]+) C")
 RE_BMP = re.compile(r"^T=(-?[\d.]+) C\s+P=(-?[\d.]+) Pa\s+alt=(-?[\d.]+) m\s+rel=(-?[\d.]+) m")
 RE_HEALTH = re.compile(r"^HEALTH: (\S+) (lost|back)")
-RE_FLT = re.compile(r"\| FLT st=(\w+) h=(-?[\d.]+) vz=(-?[\d.]+) asl=(-?[\d.]+) src=(\w+)( SIM)?")
+RE_FLT = re.compile(r"\| FLT st=(\w+) h=(-?[\d.]+) vz=(-?[\d.]+) asl=(-?[\d.]+) src=(\w+)( SIM)?(?: hsrc=(\w+))?")
 # One-off messages of the flight state machine (HW-18), shown as they come.
 EVENT_PREFIXES = ("STATE:", "SIM:", "ALT:", "FLIGHT:", "TEST:", "LORA:", "I2C:")
 STATE_COLOUR = {"PRELAUNCH": DIM, "ASCENT": GREEN, "FLOAT": CYAN, "BURST": RED, "DESCENT": YELLOW,
@@ -127,13 +127,14 @@ def show_block(t0, gps, imu, bmp, airborne, out_c=None, flt=None):
     print(f"{pad}{imu_txt} │ {mode}")
 
     if flt is not None:
-        st, h, vz, asl, src, sim = flt
+        st, h, vz, asl, src, sim, hsrc = flt
         col = STATE_COLOUR.get(st, "")
         arrow = "↑" if vz > 0.3 else "↓" if vz < -0.3 else "·"
         src_txt = {"GPS": "by GPS", "QNH": "by QNH", "STD": "std pressure"}.get(src, src)
         sim_txt = f"  {BOLD}{YELLOW}SIM{RST}" if sim else ""
         print(f"{pad}{col}{BOLD}FLIGHT {st:<9}{RST} h {h:+8.1f} m  {arrow} {vz:+5.1f} m/s │ "
-              f"ALT {asl:7.1f} m above sea ({src_txt}){sim_txt}")
+              f"ALT {asl:7.1f} m above sea ({src_txt}){sim_txt}"
+              f"{'' if hsrc in (None, 'BARO') else f'  {YELLOW}height by {hsrc}{RST}'}")
 
 
 def main():
@@ -205,7 +206,7 @@ def main():
                         airborne = airborne or v[18] == "8"
                         f = RE_FLT.search(line)
                         flt = (f.group(1), float(f.group(2)), float(f.group(3)), float(f.group(4)),
-                               f.group(5), bool(f.group(6))) if f else None
+                               f.group(5), bool(f.group(6)), f.group(7)) if f else None
                         show_block(t0, gps_f, imu_f if valid & 0x02 else None, bmp_f if valid & 0x01 else None,
                                    airborne, float(v[15]) if valid & 0x04 else None, flt)
                     continue

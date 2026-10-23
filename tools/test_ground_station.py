@@ -29,13 +29,13 @@ int main(int argc, char **argv)
 {
   uint8_t b[64];
   Telemetry t = {0};
-  if (argc == 16 && !strcmp(argv[1], "enc"))
+  if (argc == 17 && !strcmp(argv[1], "enc"))
   {
     t.payload_id = (uint8_t)atoi(argv[2]); t.seq = (uint16_t)atoi(argv[3]); t.uptime_s = (uint32_t)atol(argv[4]);
     t.state = (uint8_t)atoi(argv[5]); t.flags = (uint8_t)atoi(argv[6]); t.gps_sats = (uint8_t)atoi(argv[7]);
     t.lat_e7 = (int32_t)atol(argv[8]); t.lon_e7 = (int32_t)atol(argv[9]); t.gps_alt_m = (float)atof(argv[10]);
     t.alt_m = (float)atof(argv[11]); t.vz_mps = (float)atof(argv[12]); t.out_temp_c = (float)atof(argv[13]);
-    t.board_temp_c = (float)atof(argv[14]); t.vbat_v = (float)atof(argv[15]);
+    t.board_temp_c = (float)atof(argv[14]); t.vbat_v = (float)atof(argv[15]); t.alt_src = (uint8_t)atoi(argv[16]);
     TelemetryEncode(&t, b);
     for (unsigned i = 0; i < TP_SIZE; i++) printf("%02X", b[i]);
     printf("\n");
@@ -46,9 +46,9 @@ int main(int argc, char **argv)
     unsigned n = (unsigned)strlen(argv[2]) / 2;
     for (unsigned i = 0; i < n && i < sizeof(b); i++) { unsigned v; sscanf(argv[2] + 2 * i, "%2x", &v); b[i] = (uint8_t)v; }
     int rc = TelemetryDecode(b, n, &t);
-    printf("%d %u %u %lu %u %u %u %ld %ld %.0f %.0f %.2f %.0f %.0f %.2f\n", rc, t.payload_id, t.seq,
+    printf("%d %u %u %lu %u %u %u %ld %ld %.0f %.0f %.2f %.0f %.0f %.2f %u\n", rc, t.payload_id, t.seq,
            (unsigned long)t.uptime_s, t.state, t.flags, t.gps_sats, (long)t.lat_e7, (long)t.lon_e7,
-           t.gps_alt_m, t.alt_m, t.vz_mps, t.out_temp_c, t.board_temp_c, t.vbat_v);
+           t.gps_alt_m, t.alt_m, t.vz_mps, t.out_temp_c, t.board_temp_c, t.vbat_v, t.alt_src);
     return 0;
   }
   return 2;
@@ -65,11 +65,11 @@ def check(cond, what):
         print("FAIL:", what)
 
 
-CASES = [   # id seq uptime state flags sats lat_e7 lon_e7 gps_alt alt vz out board vbat
-    (1, 0, 0, 0, 0x48, 0, 0, 0, 0.0, 0.0, 0.0, 28.0, 31.0, 0.0),
-    (2, 1234, 5400, 1, 0x78, 14, 158000000, 1025000000, 29871.4, 29702.6, 5.37, -62.4, -11.2, 6.12),
-    (1, 65535, 65535, 4, 0xF8, 31, -337000000, -1511234567, 812.0, -42.0, -38.2, -3.5, 4.5, 4.9),
-    (7, 9, 77, 5, 0x08, 3, 899999999, 1799999999, 70000.0, 70000.0, 400.0, 200.0, -200.0, 20.0),
+CASES = [   # id seq uptime state flags sats lat_e7 lon_e7 gps_alt alt vz out board vbat alt_src
+    (1, 0, 0, 0, 0x48, 0, 0, 0, 0.0, 0.0, 0.0, 28.0, 31.0, 0.0, 0),
+    (2, 1234, 5400, 1, 0x78, 14, 158000000, 1025000000, 29871.4, 29702.6, 5.37, -62.4, -11.2, 6.12, 2),
+    (1, 65535, 65535, 4, 0xF8, 31, -337000000, -1511234567, 812.0, -42.0, -38.2, -3.5, 4.5, 4.9, 1),
+    (7, 9, 77, 5, 0x08, 3, 899999999, 1799999999, 70000.0, 70000.0, 400.0, 200.0, -200.0, 20.0, 3),
 ]
 
 
@@ -92,7 +92,7 @@ def main():
                      (gs.FLAG_RESUMED if p["resumed"] else 0))
             got = [p["id"], p["seq"], p["uptime_s"], gs.STATES.index(p["state"]), flags, p["sats"],
                    round(p["lat"] * 1e7), round(p["lon"] * 1e7), p["gps_alt_m"], p["alt_m"], p["vz_mps"],
-                   p["out_temp_c"], p["board_temp_c"], p["vbat_v"]]
+                   p["out_temp_c"], p["board_temp_c"], p["vbat_v"], gs.ALT_SRC.index(p["alt_src"])]
             want = [float(x) for x in ref[1:]]
             check(all(math.isclose(a, b, abs_tol=0.006) for a, b in zip(got, want)),
                   f"{name}: Python reads what C reads\n   python {got}\n   c      {want}")

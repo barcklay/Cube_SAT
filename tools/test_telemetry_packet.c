@@ -23,6 +23,7 @@ int main(void)
   t.flags = TP_FLAG_BARO_OK | TP_FLAG_GPS_FIX | TP_FLAG_OUT_OK | TP_FLAG_LOG_OK; t.gps_sats = 14;
   t.lat_e7 = 158000000; t.lon_e7 = 1025000000; t.gps_alt_m = 29871.4f; t.alt_m = 29702.6f;
   t.vz_mps = 5.37f; t.out_temp_c = -62.4f; t.board_temp_c = -11.2f; t.vbat_v = 6.12f;
+  t.alt_src = 2;  /* GPS: up high (HW-15) */
   TelemetryEncode(&t, b);
   CHECK(TelemetryDecode(b, TP_SIZE, &r) == 0, "decode of a good packet");
   CHECK(r.payload_id == 2 && r.seq == 1234 && r.uptime_s == 5400 && r.state == 1, "header fields");
@@ -32,6 +33,7 @@ int main(void)
   CHECK(fabsf(r.vz_mps - 5.37f) < 0.006f, "vertical speed to 1 cm/s");
   CHECK(r.out_temp_c == -62.0f && r.board_temp_c == -11.0f, "temperatures to 1 degree");
   CHECK(fabsf(r.vbat_v - 6.12f) < 0.021f, "battery voltage to 40 mV");
+  CHECK(r.alt_src == 2 && b[25] == 2, "altitude source in byte 25");
 
   /* 3. southern and western hemisphere, descent, below the launch point */
   t.lat_e7 = -337000000; t.lon_e7 = -1511234567; t.vz_mps = -38.2f; t.alt_m = -42.0f; t.state = 4;

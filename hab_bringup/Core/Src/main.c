@@ -26,6 +26,7 @@
 #include <string.h>
 #include <math.h>
 #include "flight_sm.h"
+#include "altitude_fuse.h"
 #include "lora_e22.h"
 #include "oled_screens.h"
 /* USER CODE END Includes */
@@ -93,6 +94,8 @@ typedef struct
   float asl_m;          /* altitude above sea level (barometer, reference: asl_src) */
   uint8_t state;        /* FlightState: PRELAUNCH ... LANDED (HW-18) */
   uint8_t asl_src;      /* ASL_STD / ASL_GPS / ASL_QNH */
+  uint8_t alt_src;      /* ALT_SRC_*: barometer, mix, GPS, carried forward (HW-15) */
+  uint8_t gps_model_fixes;  /* times the GPS lost its Airborne model and got it back */
 } TelemetryFrame;
 
 /* One log record in the SPI flash: exactly half a 256-byte page, so records never
@@ -107,7 +110,9 @@ typedef struct
   float asl_offset;      /* sea-level reference at that time */
   float max_alt;         /* highest altitude above launch so far */
   uint8_t reset_cause;   /* why the board last restarted (RESET_*), 0xFF in older records */
-  uint8_t reserved[128 - 8 - sizeof(TelemetryFrame) - 12 - 1 - 2];
+  uint8_t reserved0;
+  int16_t alt_bias_dm;   /* GPS minus barometer, 0.1 m (HW-15); -1 (0xFFFF) in older records */
+  uint8_t reserved[128 - 8 - sizeof(TelemetryFrame) - 12 - 1 - 1 - 2 - 2];
   uint16_t crc;          /* CRC-16/CCITT of everything above */
 } LogRecord;
 _Static_assert(sizeof(LogRecord) == 128, "LogRecord must be 128 bytes");
@@ -261,6 +266,7 @@ static double ground_pa;  /* pressure at power-on, reference for relative altitu
 static double asl_offset; /* altitude above sea level = IsaAltitude(p) + asl_offset */
 static uint8_t asl_src = ASL_STD;
 static FlightSm fsm;
+static AltFuse afuse;     /* barometer + GPS altitude (HW-15) */
 static int sim_active;
 static int test_mode;     /* 'T' lift test: a lift ride is a small flight */
 static int reset_by_programmer;  /* this boot comes from st-flash, not from a fault */
@@ -300,6 +306,16 @@ static int log_full;  /* RAM value right after power-up, before we set it */
 static uint8_t boot_flash_ok;    /* SPI flash: erase + write + read-back worked */
 static uint8_t boot_gps_talks;   /* the GPS module sends valid NMEA */
 static uint8_t boot_gps_airborne; /* and confirmed the Airborne <4g model */
+
+/* The Airborne <4g model is set at power-on. If the GPS restarts on its own in flight
+   (a dip in its supply) it may come back in the default model, which stops working above
+   ~12 km. So it is asked once a minute, without waiting for the answer (HW-15). */
+#define GPS_MODEL_CHECK_MS 60000U
+static volatile int gps_model_answer = -1;  /* dynModel from a CFG-VALGET answer, set by the parser */
+static uint32_t gps_model_next_ms;
+static uint32_t gps_model_asked_ms;
+static int gps_model_waiting;
+static uint8_t gps_model_fixes;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -1204,6 +1220,8 @@ static void LogPush(const TelemetryFrame *f)
   r->ground_pa = (float)ground_pa;
   r->asl_offset = (float)asl_offset;
   r->max_alt = fsm.max_alt;
+  double bias_dm = afuse.bias_m * 10.0;
+  r->alt_bias_dm = (int16_t)lround(bias_dm > 32000.0 ? 32000.0 : (bias_dm < -32000.0 ? -32000.0 : bias_dm));
   log_q_head = next;
 }
 
@@ -1253,7 +1271,7 @@ static void LogDump(void)
   printf("LOGDUMP BEGIN %lu\r\n", (unsigned long)log_next);
   printf("index,boot,seq,t_ms,valid,baro_pa,baro_temp_c,baro_rel_m,ax_g,ay_g,az_g,"
          "gx_dps,gy_dps,gz_dps,out_temp_c,gps_fix,gps_sats,gps_lat,gps_lon,gps_alt_m,reset_cause,"
-         "state,alt_m,vz_mps,asl_m,sim\r\n");
+         "state,alt_m,vz_mps,asl_m,sim,alt_src,gps_model_fixes\r\n");
   uint32_t bad = 0;
   for (uint32_t slot = 0; slot < log_next; slot++)
   {
@@ -1296,7 +1314,8 @@ static void LogDump(void)
     PrintFixed(f->vz_mps, 2);
     printf(",");
     PrintFixed(f->asl_m, 1);
-    printf(",%u\r\n", (f->valid & FRAME_SIM) ? 1U : 0U);
+    printf(",%u,%s,%u\r\n", (f->valid & FRAME_SIM) ? 1U : 0U,
+           f->alt_src <= ALT_SRC_NONE ? ALT_SRC_NAME[f->alt_src] : "?", f->gps_model_fixes);
   }
   printf("LOGDUMP END records=%lu broken=%lu\r\n", (unsigned long)(log_next - bad), (unsigned long)bad);
 }
@@ -1525,6 +1544,14 @@ static void GpsProcessByte(uint8_t b)
       {
         f.ready = 1;
         ubx = f;
+        if (f.cls == UBX_CLASS_CFG && f.id == UBX_ID_VALGET && f.len >= 9 &&
+            f.payload[4] == (uint8_t)CFG_NAVSPG_DYNMODEL &&
+            f.payload[5] == (uint8_t)(CFG_NAVSPG_DYNMODEL >> 8) &&
+            f.payload[6] == (uint8_t)(CFG_NAVSPG_DYNMODEL >> 16) &&
+            f.payload[7] == (uint8_t)(CFG_NAVSPG_DYNMODEL >> 24))
+        {
+          gps_model_answer = f.payload[8];
+        }
       }
       state = 0;
       break;
@@ -1713,6 +1740,57 @@ static void GpsFillFrame(TelemetryFrame *f)
   }
 }
 
+/* Called as often as possible from the main loop: asks the GPS for its model once a
+   minute and puts Airborne <4g back if it is gone. Never waits for the GPS. */
+static void GpsModelService(void)
+{
+  if (!boot_gps_talks)
+  {
+    return;
+  }
+  uint32_t now = HAL_GetTick();
+  if (gps_model_waiting)
+  {
+    int m = gps_model_answer;
+    if (m >= 0)
+    {
+      gps_model_waiting = 0;
+      if (m != (int)DYNMODEL_AIRBORNE_4G)
+      {
+        uint8_t p[9] = {0x00, UBX_LAYER_RAM | UBX_LAYER_BBR, 0x00, 0x00,
+                        (uint8_t)CFG_NAVSPG_DYNMODEL, (uint8_t)(CFG_NAVSPG_DYNMODEL >> 8),
+                        (uint8_t)(CFG_NAVSPG_DYNMODEL >> 16), (uint8_t)(CFG_NAVSPG_DYNMODEL >> 24),
+                        DYNMODEL_AIRBORNE_4G};
+        UbxSend(UBX_CLASS_CFG, UBX_ID_VALSET, p, sizeof(p));
+        if (gps_model_fixes < 255U)
+        {
+          gps_model_fixes++;
+        }
+        printf("GPS: model was %d (%s), set back to AIRBORNE<4g (%u times so far)\r\n", m,
+               DynModelName(m), gps_model_fixes);
+        gps_model_next_ms = now + 2000U;  /* and check again soon that it took */
+      }
+    }
+    else if (now - gps_model_asked_ms > 2000U)
+    {
+      gps_model_waiting = 0;
+      printf("GPS: no answer to the model check\r\n");
+    }
+    return;
+  }
+  if ((int32_t)(now - gps_model_next_ms) >= 0)
+  {
+    uint8_t p[8] = {0x00, 0x00 /* RAM: the active value */, 0x00, 0x00,
+                    (uint8_t)CFG_NAVSPG_DYNMODEL, (uint8_t)(CFG_NAVSPG_DYNMODEL >> 8),
+                    (uint8_t)(CFG_NAVSPG_DYNMODEL >> 16), (uint8_t)(CFG_NAVSPG_DYNMODEL >> 24)};
+    gps_model_answer = -1;
+    UbxSend(UBX_CLASS_CFG, UBX_ID_VALGET, p, sizeof(p));
+    gps_model_waiting = 1;
+    gps_model_asked_ms = now;
+    gps_model_next_ms = now + GPS_MODEL_CHECK_MS;
+  }
+}
+
 /* ---------------- The frame: one line per frame on the console ---------------- */
 
 static void FramePrint(const TelemetryFrame *f)
@@ -1747,8 +1825,8 @@ static void FramePrint(const TelemetryFrame *f)
   PrintFixed(f->vz_mps, 1);
   printf(" asl=");
   PrintFixed(f->asl_m, 1);
-  printf(" src=%s%s\r\n", f->asl_src == ASL_GPS ? "GPS" : f->asl_src == ASL_QNH ? "QNH" : "STD",
-         (f->valid & FRAME_SIM) ? " SIM" : "");
+  printf(" src=%s%s hsrc=%s\r\n", f->asl_src == ASL_GPS ? "GPS" : f->asl_src == ASL_QNH ? "QNH" : "STD",
+         (f->valid & FRAME_SIM) ? " SIM" : "", f->alt_src <= ALT_SRC_NONE ? ALT_SRC_NAME[f->alt_src] : "?");
 }
 
 /* ---------------- Flight state machine (HW-18) ---------------- */
@@ -1835,11 +1913,33 @@ static double SimAltitude(uint32_t now_ms)
   return h + (((sim_rng >> 16) & 0xFFU) / 255.0 - 0.5);
 }
 
+/* 'S' simulation (HW-15): a barometer and a GPS reading made from SimAltitude, so the
+   barometer/GPS mix is exercised on the bench. The barometer reads the standard
+   atmosphere and stops at 300 hPa like the BMP390; the GPS sees a weather difference that
+   grows by 4 m per km, +-3 m of noise, and gives a sample every frame (the profile runs
+   40x faster than real, one sample a second would be one per 200 m). */
+static void SimInput(uint32_t now_ms, AltInput *in)
+{
+  double h = SimAltitude(now_ms);
+  double launch_isa = IsaAltitude(ground_pa > 0.0 ? ground_pa : 101325.0);
+  double p = IsaPressure(launch_isa + h);
+  if (p < 30000.0)
+  {
+    p = 30000.0;
+  }
+  sim_rng = sim_rng * 1103515245U + 12345U;
+  in->baro_ok = 1;
+  in->press_pa = p;
+  in->baro_asl_m = IsaAltitude(p) + asl_offset;
+  in->gps_ok = 1;
+  in->gps_sats = 12;
+  in->gps_asl_m = launch_isa + asl_offset + h * 1.004 + (((sim_rng >> 16) & 0xFFU) / 255.0 - 0.5) * 6.0;
+  in->gps_ms = now_ms;
+}
+
 /* Altitudes for this frame and one step of the state machine. */
 static void FlightUpdate(TelemetryFrame *f, double press_pa, int baro_ok)
 {
-  double alt = 0.0;
-  int alt_ok = 0;
   int gps_ok = (f->valid & FRAME_OK_GPSFIX) != 0;
   if (baro_ok && ground_pa > 0.0)
   {
@@ -1858,28 +1958,38 @@ static void FlightUpdate(TelemetryFrame *f, double press_pa, int baro_ok)
         asl_offset += 0.02 * (target - asl_offset);  /* ~10 s average */
       }
     }
-    f->asl_m = (float)(IsaAltitude(press_pa) + asl_offset);
-    alt = IsaAltitude(press_pa) - IsaAltitude(ground_pa);
-    alt_ok = 1;
   }
-  else if (gps_ok && ground_pa > 0.0)
+
+  /* Barometer below ~7 km, GPS above ~9 km, a smooth mix in between (altitude_fuse.h).
+     The weather difference between them is learned only in a real flight: not before the
+     launch (the calibration above does that) and not in the lift test (GPS indoors). */
+  AltInput in = {0};
+  if (sim_active)
   {
-    /* No barometer: GPS altitude minus the launch point's sea-level altitude. */
-    f->asl_m = f->gps_alt_m;
-    alt = f->gps_alt_m - (IsaAltitude(ground_pa) + asl_offset);
-    alt_ok = 1;
+    SimInput(f->t_ms, &in);
+    f->valid |= FRAME_SIM;
+  }
+  else
+  {
+    in.baro_ok = baro_ok && ground_pa > 0.0;
+    in.press_pa = press_pa;
+    in.baro_asl_m = IsaAltitude(press_pa) + asl_offset;
+    in.gps_ok = gps_ok;
+    in.gps_sats = f->gps_sats;
+    in.gps_asl_m = f->gps_alt_m;
+    in.gps_ms = gps_last_gga_ms;
   }
   if (test_mode)
   {
     f->valid |= FRAME_TEST;
   }
-  if (sim_active)
-  {
-    alt = SimAltitude(f->t_ms);
-    alt_ok = 1;
-    f->valid |= FRAME_SIM;
-    f->asl_m = (float)(alt + IsaAltitude(ground_pa > 0.0 ? ground_pa : 101325.0) + asl_offset);
-  }
+  int learn = fsm.state != FS_PRELAUNCH && !test_mode;
+  int alt_ok = AltFuseUpdate(&afuse, f->t_ms, &in, learn) && (ground_pa > 0.0 || sim_active);
+  double launch_asl = IsaAltitude(ground_pa > 0.0 ? ground_pa : 101325.0) + asl_offset;
+  double alt = afuse.asl_m - launch_asl;
+  f->asl_m = (float)afuse.asl_m;
+  f->alt_src = afuse.src;
+  f->gps_model_fixes = gps_model_fixes;
 
   FlightState before = fsm.state;
   if (FlightSmUpdate(&fsm, f->t_ms, (float)alt, alt_ok))
@@ -1921,6 +2031,7 @@ static void FlightResume(int bmp_ok)
   asl_offset = log_last.asl_offset;
   asl_src = log_last.frame.asl_src;
   FlightSmResume(&fsm, HAL_GetTick(), (FlightState)log_last.frame.state, log_last.max_alt);
+  afuse.bias_m = log_last.alt_bias_dm / 10.0;
   if (log_last.frame.valid & FRAME_TEST)
   {
     test_mode = 1;
@@ -1974,6 +2085,7 @@ static void RadioPacket(const TelemetryFrame *f, uint8_t pkt[TP_SIZE])
   tm.vz_mps = f->vz_mps;
   tm.out_temp_c = f->out_temp_c;
   tm.board_temp_c = f->baro_temp_c;
+  tm.alt_src = f->alt_src;
   TelemetryEncode(&tm, pkt);
 }
 
@@ -2134,6 +2246,7 @@ static void DisplayTick(const TelemetryFrame *f)
   disp.state = FS_NAME[f->state];
   disp.mode = sim_active ? "SIM" : (test_mode ? "LIFT" : NULL);
   disp.alt_m = f->alt_m;
+  disp.alt_src = f->alt_src <= ALT_SRC_NONE ? ALT_SRC_NAME[f->alt_src] : NULL;
   disp.vz_mps = f->vz_mps;
   disp.gps_link = (f->valid & FRAME_OK_GPSLINK) != 0;
   disp.gps_fix = (f->valid & FRAME_OK_GPSFIX) != 0;
@@ -2406,6 +2519,7 @@ int main(void)
     /* USER CODE BEGIN 3 */
     /* Between frames: keep draining GPS bytes and feeding the log to the flash. */
     GpsPoll();
+    GpsModelService();
     LogService();
     LedService();
     uint8_t cmd;
@@ -2427,6 +2541,7 @@ int main(void)
         {
           sim_active = 0;
           FlightSmInit(&fsm, HAL_GetTick());
+          AltFuseInit(&afuse);
           BuzzerSet(0);
           printf("SIM: stopped, back to PRELAUNCH\r\n");
         }
@@ -2439,6 +2554,7 @@ int main(void)
           sim_active = 1;
           sim_start_ms = HAL_GetTick();
           FlightSmInit(&fsm, sim_start_ms);
+          AltFuseInit(&afuse);
           printf("SIM: fake flight x40 - burst at 30 km after ~2.7 min, landing after ~4 min,"
                  " LANDED 1 min later. Press S again to stop.\r\n");
         }
